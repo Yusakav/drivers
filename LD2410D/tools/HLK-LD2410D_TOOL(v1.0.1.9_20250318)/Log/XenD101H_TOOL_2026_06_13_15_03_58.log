@@ -1,0 +1,15 @@
+2026/06/13 15:04:02.058 [I]=> Stop Realtime data show.
+2026/06/13 15:04:03.003 [I]=> Stop Realtime data show.
+2026/06/13 15:04:03.687 [I]=> Stop Noise scan.
+2026/06/13 15:04:04.286 [I]=> Stop Realtime data show.
+2026/06/13 15:04:04.591 [I]=> Stop Realtime data show.
+2026/06/13 15:04:05.620 [I]=> Stop Realtime data show.
+2026/06/13 15:04:05.622 [I]=> Stop Noise scan.
+2026/06/13 15:04:05.622 [I]=> Stop Noise scan.
+2026/06/13 15:04:05.633 [I]=> StopIOCP +++
+2026/06/13 15:04:05.633 [I]=> StopIOCP ---
+2026/06/13 15:04:05.633 [I]=> CloseSerial: mSerialFile=0xffffffff
+2026/06/13 15:04:05.633 [I]=> StopIOCP +++
+2026/06/13 15:04:05.633 [I]=> StopIOCP ---
+2026/06/13 15:04:05.633 [I]=> CloseSerial: mSerialFile=0xffffffff
+2026/06/13 15:04:05.633 [I]=> CloseSerial: mSerialFile=0xffffffff

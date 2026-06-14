@@ -1,0 +1,9 @@
+2026/01/20 18:31:02.852 [I]=> Stop Realtime data show.
+2026/01/20 18:31:02.853 [I]=> Stop Noise scan.
+2026/01/20 18:31:02.855 [I]=> StopIOCP +++
+2026/01/20 18:31:02.855 [I]=> StopIOCP ---
+2026/01/20 18:31:02.855 [I]=> CloseSerial: mSerialFile=0xffffffff
+2026/01/20 18:31:02.855 [I]=> StopIOCP +++
+2026/01/20 18:31:02.855 [I]=> StopIOCP ---
+2026/01/20 18:31:02.855 [I]=> CloseSerial: mSerialFile=0xffffffff
+2026/01/20 18:31:02.855 [I]=> CloseSerial: mSerialFile=0xffffffff
