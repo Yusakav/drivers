@@ -16,7 +16,7 @@
 extern "C" {
 #endif /* Cplusplus */
 
-#include "ch32l103.h"
+#include "ch32x035.h"
 
 #define LCD_RGB888 1
 #define LCD_RGB565 2
@@ -79,8 +79,8 @@ typedef uint16_t Color_t; /**< 16位RGB565 */
 /**
  * @brief  ST7735 Size
  */
-#define ST7735_WIDTH  128U
-#define ST7735_HEIGHT 128U
+#define ST7735_WIDTH  160U
+#define ST7735_HEIGHT 80U
 
 
 /**
