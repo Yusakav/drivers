@@ -57,8 +57,11 @@
  */
 #define IS_BATTERY_TYPE(chemistry)                                             \
   do {                                                                         \
-    if ((chemistry <= BATTERY_CHEM_UNKNOWN) ||                                 \
-        (chemistry >= BATTERY_CHEM_MAX))                                       \
+    if (((chemistry) != BATTERY_CHEM_LIFEPO4) &&                               \
+        ((chemistry) != BATTERY_CHEM_NMC) &&                                   \
+        ((chemistry) != BATTERY_CHEM_LIPO) &&                                  \
+        ((chemistry) != BATTERY_CHEM_LCO) &&                                   \
+        ((chemistry) != BATTERY_CHEM_LTO))                                     \
       return BQ25710_ERR_PARAM;                                                \
   } while (0)
 
@@ -69,7 +72,7 @@
  */
 #define IS_BATTERY_CELLS(cells)                                                \
   do {                                                                         \
-    if ((cells <= BATTERY_CELLS_UNKNOWN) || (cells >= BATTERY_CELLS_MAX))      \
+    if (((cells) < BATTERY_CELLS_1S) || ((cells) > BATTERY_CELLS_4S))          \
       return BQ25710_ERR_PARAM;                                                \
   } while (0)
 
@@ -523,11 +526,16 @@ bq25710_err_t bq25710_charge_init(battery_chemistry_t chemistry,
     IS_BATTERY_CELLS(cells);
 
     int8_t result;
+    battery_ret_t battery_ret;
     uint16_t reg_value;
-    battery_params_t *p = (battery_params_t*)&g_battery_params_table[chemistry][cells];
+
+    battery_ret = battery_ti_get_bq25710_params(chemistry, cells,
+                                                &g_bq25710_ctx.charge.params);
+    if (battery_ret != BATTERY_RET_OK) {
+        return BQ25710_ERR_PARAM;
+    }
     
     /* 填充充电上下文 */
-    g_bq25710_ctx.charge.params                = p;                                                                                 /** 电池参数 */
     g_bq25710_ctx.charge.chemistry             = chemistry;                                                                         /** 电池化学类型 */
     g_bq25710_ctx.charge.cells                 = cells;                                                                             /** 串联节数 */
     g_bq25710_ctx.charge.stage                 = BQ25710_CHG_STAGE_DETECTION;                                                       /** 充电阶段 */
@@ -541,14 +549,14 @@ bq25710_err_t bq25710_charge_init(battery_chemistry_t chemistry,
     g_bq25710_ctx.charge.initialized           = 1;                                                                                 /** 初始化标志 */
     
     /* 校验最大充电电压 VREG */
-    result = validate_step(g_bq25710_ctx.charge.params->chg_voltage_mv, 
+    result = validate_step(g_bq25710_ctx.charge.params.chg_voltage_mv, 
                            BQ25710_CHG_VOLT_MIN, 
                            BQ25710_CHG_VOLT_MAX, 
                            BQ25710_CHG_VOLT_STEP);
     if (result != BQ25710_ERR_OK)
     {
         LOG_E("无效的最大充电电压: %u mV (范围: %u-%u, 步进: %u)",
-              g_bq25710_ctx.charge.params->chg_voltage_mv, 
+              g_bq25710_ctx.charge.params.chg_voltage_mv, 
               BQ25710_CHG_VOLT_MIN, 
               BQ25710_CHG_VOLT_MAX, 
               BQ25710_CHG_VOLT_STEP);
@@ -556,14 +564,14 @@ bq25710_err_t bq25710_charge_init(battery_chemistry_t chemistry,
     }
 
     /* 校验最小系统电压 MINSYS */
-    result = validate_step(g_bq25710_ctx.charge.params->min_sys_voltage_mv, 
+    result = validate_step(g_bq25710_ctx.charge.params.min_sys_voltage_mv, 
                            BQ25710_MINSYS_MIN,
                            BQ25710_MINSYS_MAX, 
                            BQ25710_MINSYS_STEP);
     if (result != BQ25710_ERR_OK) 
     {
         LOG_E("无效的最小系统电压: %u mV (范围: %u-%u, 步进: %u)",
-              g_bq25710_ctx.charge.params->min_sys_voltage_mv, 
+              g_bq25710_ctx.charge.params.min_sys_voltage_mv, 
               BQ25710_MINSYS_MIN, 
               BQ25710_MINSYS_MAX, 
               BQ25710_MINSYS_STEP);
@@ -571,14 +579,14 @@ bq25710_err_t bq25710_charge_init(battery_chemistry_t chemistry,
     }
 
     /* 校验充电电流 */
-    result = validate_step(g_bq25710_ctx.charge.params->charge_current_ma, 
+    result = validate_step(g_bq25710_ctx.charge.params.charge_current_ma, 
                            BQ25710_CHG_CURR_MIN, 
                            BQ25710_CHG_CURR_MAX, 
                            BQ25710_CHG_CURR_STEP);
     if (result != BQ25710_ERR_OK) 
     {
         LOG_E("无效的充电电流: %u mA (范围: %u-%u, 步进: %u)",
-              g_bq25710_ctx.charge.params->charge_current_ma, 
+              g_bq25710_ctx.charge.params.charge_current_ma, 
               BQ25710_CHG_CURR_MIN, 
               BQ25710_CHG_CURR_MAX, 
               BQ25710_CHG_CURR_STEP);
@@ -589,21 +597,21 @@ bq25710_err_t bq25710_charge_init(battery_chemistry_t chemistry,
      *   reg = (mV / 8) << 3, MaxChargeVoltage [14:3]
      *   例: NMC 4S 16.8V → (16800/8) << 3 = 2100 << 3 = 0x41A0 (实际格式)
      */
-    reg_value = (g_bq25710_ctx.charge.params->chg_voltage_mv / 8) << 3;
+    reg_value = (g_bq25710_ctx.charge.params.chg_voltage_mv / 8U) << 3;
     _reg_write(BQ25710_REG_MAX_CHARGE_VOLT, reg_value);
 
     /* 配置最小系统电压 MINSYS
      *   reg = (mV / 256) << 8, MinSystemVoltage [13:8]
      *   例: NMC 4S 14.336V → (14336/256) << 8 = 56 << 8 = 0x3800
      */
-    reg_value = (g_bq25710_ctx.charge.params->min_sys_voltage_mv / BQ25710_MINSYS_STEP) << 8;
+    reg_value = (g_bq25710_ctx.charge.params.min_sys_voltage_mv / BQ25710_MINSYS_STEP) << 8;
     _reg_write(BQ25710_REG_MIN_SYS_VOLTAGE, reg_value);
 
     /* 配置充电电流
      *   reg = (mA / 64) << 6, ChargeCurrent [12:6]
      *   例: 2000mA → (2000/64) << 6 = 31 << 6 = 0x07C0
      */
-    reg_value = (g_bq25710_ctx.charge.params->charge_current_ma / BQ25710_CHG_CURR_STEP) << 6;
+    reg_value = (g_bq25710_ctx.charge.params.charge_current_ma / BQ25710_CHG_CURR_STEP) << 6;
     _reg_write(BQ25710_REG_CHARGE_CURRENT, reg_value);
 
     /* 配置看门狗 */
@@ -685,7 +693,7 @@ bq25710_err_t bq25710_charge_run(void)
         if (adc.vbat_mv < 2000) return BQ25710_ERR_BAT_MISSING;
 
         /* 判断电池当前电压, 决定进入哪个阶段 */
-        if (adc.vbat_mv < ctx->params->precharge_thresh_mv) 
+        if (adc.vbat_mv < ctx->params.precharge_thresh_mv) 
         {
             ctx->stage = BQ25710_CHG_STAGE_PRECHARGE;       /**电池亏电, 进入预充电阶段 */
         } 
@@ -712,7 +720,7 @@ bq25710_err_t bq25710_charge_run(void)
         }
         /* LDO 预充电: 硬件自动管理, 电流钳位 ~384mA (1S) 或更大 */
         /* 当电池电压 ≥ 预充电阈值时, 进入 CC */
-        if (adc.vbat_mv >= ctx->params->precharge_thresh_mv) 
+        if (adc.vbat_mv >= ctx->params.precharge_thresh_mv) 
         {
             ctx->stage = BQ25710_CHG_STAGE_CC;
             ctx->stage_start_ms = now_ms;
@@ -730,7 +738,7 @@ bq25710_err_t bq25710_charge_run(void)
         /* 当 VBAT 接近终止电压 (98%) 时, 自动转入 CV
             * 硬件自动切换 CC→CV, 软件监控 IN_FCHRG → 0 作为进入 CV 标志
             */
-        if (adc.vbat_mv >= ctx->params->chg_voltage_mv * 98 / 100) 
+        if (adc.vbat_mv >= ctx->params.chg_voltage_mv * 98 / 100) 
         {
             ctx->stage = BQ25710_CHG_STAGE_CV;              /** 进入 CV 阶段 */
             ctx->stage_start_ms = now_ms;
@@ -747,7 +755,7 @@ bq25710_err_t bq25710_charge_run(void)
             return BQ25710_ERR_TIMEOUT;
         }
         /* C/10 终止: ICHG ≤ 充电电流的 10% */
-        if (adc.ichg_ma > 0 && adc.ichg_ma <= ctx->params->term_current_ma) 
+        if (adc.ichg_ma > 0 && adc.ichg_ma <= ctx->params.term_current_ma) 
         {
             ctx->stage = BQ25710_CHG_STAGE_DONE;            /** C/10 终止, 进入完成阶段 */
             ctx->stage_start_ms = now_ms;
@@ -797,7 +805,7 @@ bq25710_charge_stage_t bq25710_charge_get_stage(void)
 }
 
  /**
- * @brief 获取电池参数表 (按化学类型和节数索引)
+ * @brief 获取 BQ25710 可直接使用的电池参数
  * @param chemistry 化学类型
  * @param cells     串联节数
  * @param params_out 输出参数指针
@@ -805,13 +813,19 @@ bq25710_charge_stage_t bq25710_charge_get_stage(void)
  */
 bq25710_err_t bq25710_get_battery_params(battery_chemistry_t chemistry,
                                          battery_cell_count_t cells,
-                                         battery_params_t *params_out)
+                                         battery_ti_bq25710_params_t *params_out)
 {
+    battery_ret_t battery_ret;
+
     NULL_CHECK(params_out);
     IS_BATTERY_TYPE(chemistry);
     IS_BATTERY_CELLS(cells);
 
-    *params_out = g_battery_params_table[chemistry][cells];
+    battery_ret = battery_ti_get_bq25710_params(chemistry, cells, params_out);
+    if (battery_ret != BATTERY_RET_OK) {
+        return BQ25710_ERR_PARAM;
+    }
+
     return BQ25710_ERR_OK;
 }
 
@@ -1357,7 +1371,7 @@ bq25710_err_t bq25710_learn_start_cycle(void)
     /* Phase 1: CC 充电 — 等待电池充满 */
     /* 切换到充电模式执行 CC+CV */
     _reg_write(BQ25710_REG_CHARGE_CURRENT,
-               (uint16_t)(((uint32_t)ctx->params->charge_current_ma / 64) << 6));
+               (uint16_t)(((uint32_t)ctx->params.charge_current_ma / 64U) << 6));
 
     BQ25710_ChargeOption0_t opt0;
     _reg_read(BQ25710_REG_CHARGE_OPTION_0, &opt0.all);
@@ -1377,8 +1391,8 @@ bq25710_err_t bq25710_learn_start_cycle(void)
         bq25710_adc_read_all(&adc);
 
         /* 充电完成判据: VBAT ≥ VREG 且 ICHG ≤ C/10 */
-        if (adc.vbat_mv >= ctx->params->chg_voltage_mv * 99 / 100 &&
-            adc.ichg_ma > 0 && adc.ichg_ma <= ctx->params->term_current_ma) {
+        if (adc.vbat_mv >= ctx->params.chg_voltage_mv * 99 / 100 &&
+            adc.ichg_ma > 0 && adc.ichg_ma <= ctx->params.term_current_ma) {
             break;
         }
     }
@@ -1763,7 +1777,7 @@ bq25710_err_t bq25710_auto_detect_cells(battery_cell_count_t *cells_out)
 
     if (vbat < 1000) 
     {
-        *cells_out = BATTERY_CELLS_UNKNOWN;
+        *cells_out = BATTERY_CELLS_INVALID;
         return BQ25710_ERR_BAT_MISSING;
     }
 
@@ -1941,7 +1955,7 @@ bq25710_err_t bq25710_get_system_status(bq25710_system_status_t *status)
     status->battery_present = (status->adc.vbat_mv > 1000) ? 1 : 0;
 
     /* 电池参数 */
-    status->batt_params = g_bq25710_ctx.charge.params;
+    status->batt_params = &g_bq25710_ctx.charge.params;
 
     /* 充电设定 */
     BQ25710_ChargeCurrent_t    ChargeCurrent; /**< [0x14] 电池充电电流目标值 */
@@ -1998,10 +2012,10 @@ void bq25710_print_status_report(void)
     printf("  PTM Active:    %s\n", st.is_ptm ? "YES" : "NO");
     printf("  ICO Done:      %s\n", st.ico_done ? "YES" : "NO");
 
-    if (st.battery_present) {
+    if (st.battery_present && (st.batt_params != NULL)) {
         printf("  Chemistry:     %s, %dS\n",
-               st.batt_params->chemistry == BATTERY_CHEM_LIFEPO4 ? "LiFePO4" : "NMC",
-               st.batt_params->cells);
+               st.batt_params->chemistry_name,
+               battery_cells_value(st.batt_params->cells));
     }
 
     printf("  --- ADC Readings ---\n");

@@ -1,134 +1,125 @@
 /**
  * @file battery.c
- * @author nyarukov (luckychaoyue1@gmail.com)
- * @brief 电池参数配置查找表
- * @version 0.1
- * @date 2026-06-13
- * 
- * @copyright Copyright (c) 2026
- * 
+ * @brief Generic battery profile table and lookup API.
  */
 
 #include "battery.h"
 
-/**
- * @brief 8种标准电池参数配置查找表 (按化学类型与节数顺序排列)
- * 
- */
-const battery_params_t g_battery_params_table[BATTERY_CHEM_MAX][BATTERY_CELLS_MAX] = {
-    
-    /* ==================== 磷酸铁锂 (LiFePO4) 分组 ==================== */
-    [BATTERY_CHEM_LIFEPO4] = 
-    {
-        /* 1S */
-        [BATTERY_CELLS_1S] = 
-        {
-            .chemistry               = BATTERY_CHEM_LIFEPO4,                               /**< 化学类型: 磷酸铁锂 */ 
-            .cells                   = BATTERY_CELLS_1S,                                   /**< 电池节数: 1S */
-            .chg_voltage_mv          = BATTERY_PARAM_1x_LIFEPO4_CHG_VOLTAGE_MV,            /**< 总充电终止电压: 3.600V */
-            .chg_voltage_per_cell_mv = BATTERY_PARAM_1x_LIFEPO4_CHG_VOLTAGE_PER_CELL_MV,   /**< 单节充电终止电压: 3.60V */
-            .min_sys_voltage_mv      = BATTERY_PARAM_1x_LIFEPO4_MIN_SYS_VOLTAGE_MV,        /**< 最小系统电压: 3.072V */
-            .precharge_thresh_mv     = BATTERY_PARAM_1x_LIFEPO4_PRECHARGE_THRESH_MV,       /**< 预充电阈值电压: 3.0V */
-            .charge_current_ma       = BATTERY_PARAM_1x_LIFEPO4_CHARGE_CURRENT_MA,         /**< 典型快充充电电流: 1A */
-            .term_current_ma         = BATTERY_PARAM_1x_LIFEPO4_TERM_CURRENT_MA,           /**< 充电截止电流: 100mA */
-            .sysovp_thresh_mv        = BATTERY_PARAM_1x_LIFEPO4_SYSOVP_THRESH_MV           /**< 系统过压保护阈值: 4.6V */
-        },
-        /* 2S */
-        [BATTERY_CELLS_2S] = 
-        {
-            .chemistry               = BATTERY_CHEM_LIFEPO4,                               /**< 化学类型: 磷酸铁锂 */
-            .cells                   = BATTERY_CELLS_2S,                                   /**< 电池节数: 2S */
-            .chg_voltage_mv          = BATTERY_PARAM_2x_LIFEPO4_CHG_VOLTAGE_MV,            /**< 总充电终止电压: 7.200V */
-            .chg_voltage_per_cell_mv = BATTERY_PARAM_2x_LIFEPO4_CHG_VOLTAGE_PER_CELL_MV,   /**< 单节充电终止电压: 3.60V */
-            .min_sys_voltage_mv      = BATTERY_PARAM_2x_LIFEPO4_MIN_SYS_VOLTAGE_MV,        /**< 最小系统电压: 6.144V */
-            .precharge_thresh_mv     = BATTERY_PARAM_2x_LIFEPO4_PRECHARGE_THRESH_MV,       /**< 预充电阈值电压: 6.0V */
-            .charge_current_ma       = BATTERY_PARAM_2x_LIFEPO4_CHARGE_CURRENT_MA,         /**< 典型快充充电电流: 2A */
-            .term_current_ma         = BATTERY_PARAM_2x_LIFEPO4_TERM_CURRENT_MA,           /**< 充电截止电流: 200mA */
-            .sysovp_thresh_mv        = BATTERY_PARAM_2x_LIFEPO4_SYSOVP_THRESH_MV           /**< 系统过压保护阈值: 8.2V */
-        },
-        /* 3S */
-        [BATTERY_CELLS_3S] = 
-        {
-            .chemistry               = BATTERY_CHEM_LIFEPO4,                               /**< 化学类型: 磷酸铁锂 */
-            .cells                   = BATTERY_CELLS_3S,                                   /**< 电池节数: 3S */
-            .chg_voltage_mv          = BATTERY_PARAM_3x_LIFEPO4_CHG_VOLTAGE_MV,            /**< 总充电终止电压: 10.800V */
-            .chg_voltage_per_cell_mv = BATTERY_PARAM_3x_LIFEPO4_CHG_VOLTAGE_PER_CELL_MV,   /**< 单节充电终止电压: 3.60V */
-            .min_sys_voltage_mv      = BATTERY_PARAM_3x_LIFEPO4_MIN_SYS_VOLTAGE_MV,        /**< 最小系统电压: 9.216V */
-            .precharge_thresh_mv     = BATTERY_PARAM_3x_LIFEPO4_PRECHARGE_THRESH_MV,       /**< 预充电阈值电压: 9.0V */
-            .charge_current_ma       = BATTERY_PARAM_3x_LIFEPO4_CHARGE_CURRENT_MA,         /**< 典型快充充电电流: 2A */
-            .term_current_ma         = BATTERY_PARAM_3x_LIFEPO4_TERM_CURRENT_MA,           /**< 充电截止电流: 200mA */
-            .sysovp_thresh_mv        = BATTERY_PARAM_3x_LIFEPO4_SYSOVP_THRESH_MV           /**< 系统过压保护阈值: 11.8V */
-        },
-        /* 4S */
-        [BATTERY_CELLS_4S] = 
-        {
-            .chemistry               = BATTERY_CHEM_LIFEPO4,                               /**< 化学类型: 磷酸铁锂 */
-            .cells                   = BATTERY_CELLS_4S,                                   /**< 电池节数: 4S */
-            .chg_voltage_mv          = BATTERY_PARAM_4x_LIFEPO4_CHG_VOLTAGE_MV,            /**< 总充电终止电压: 14.400V */
-            .chg_voltage_per_cell_mv = BATTERY_PARAM_4x_LIFEPO4_CHG_VOLTAGE_PER_CELL_MV,   /**< 单节充电终止电压: 3.60V */
-            .min_sys_voltage_mv      = BATTERY_PARAM_4x_LIFEPO4_MIN_SYS_VOLTAGE_MV,        /**< 最小系统电压: 12.288V */
-            .precharge_thresh_mv     = BATTERY_PARAM_4x_LIFEPO4_PRECHARGE_THRESH_MV,       /**< 预充电阈值电压: 12.0V */
-            .charge_current_ma       = BATTERY_PARAM_4x_LIFEPO4_CHARGE_CURRENT_MA,         /**< 典型快充充电电流: 2A */
-            .term_current_ma         = BATTERY_PARAM_4x_LIFEPO4_TERM_CURRENT_MA,           /**< 充电截止电流: 200mA */
-            .sysovp_thresh_mv        = BATTERY_PARAM_4x_LIFEPO4_SYSOVP_THRESH_MV           /**< 系统过压保护阈值: 15.4V */
-        },
-    },
-    
-    /* ==================== 三元锂 (NMC / Li-ion) 分组 ==================== */
-    [BATTERY_CHEM_NMC] = 
-    {
-        [BATTERY_CELLS_1S] = 
-        {
-            .chemistry               = BATTERY_CHEM_NMC,                                   /**< 化学类型: 三元锂 */
-            .cells                   = BATTERY_CELLS_1S,                                   /**< 电池节数: 1S */
-            .chg_voltage_mv          = BATTERY_PARAM_1x_NMC_CHG_VOLTAGE_MV,                /**< 总充电终止电压: 4.200V */
-            .chg_voltage_per_cell_mv = BATTERY_PARAM_1x_NMC_CHG_VOLTAGE_PER_CELL_MV,       /**< 单节充电终止电压: 4.20V */
-            .min_sys_voltage_mv      = BATTERY_PARAM_1x_NMC_MIN_SYS_VOLTAGE_MV,            /**< 最小系统电压: 3.584V */
-            .precharge_thresh_mv     = BATTERY_PARAM_1x_NMC_PRECHARGE_THRESH_MV,           /**< 预充电阈值电压: 3.0V */
-            .charge_current_ma       = BATTERY_PARAM_1x_NMC_CHARGE_CURRENT_MA,             /**< 典型快充充电电流: 1A */
-            .term_current_ma         = BATTERY_PARAM_1x_NMC_TERM_CURRENT_MA,               /**< 充电截止电流: 100mA */
-            .sysovp_thresh_mv        = BATTERY_PARAM_1x_NMC_SYSOVP_THRESH_MV               /**< 系统过压保护阈值: 5.2V */
-        },
-        /* 2S */
-        [BATTERY_CELLS_2S] = 
-        {
-            .chemistry               = BATTERY_CHEM_NMC,                                   /**< 化学类型: 三元锂 */
-            .cells                   = BATTERY_CELLS_2S,                                   /**< 电池节数: 2S */
-            .chg_voltage_mv          = BATTERY_PARAM_2x_NMC_CHG_VOLTAGE_MV,                /**< 总充电终止电压: 8.400V */
-            .chg_voltage_per_cell_mv = BATTERY_PARAM_2x_NMC_CHG_VOLTAGE_PER_CELL_MV,       /**< 单节充电终止电压: 4.20V */
-            .min_sys_voltage_mv      = BATTERY_PARAM_2x_NMC_MIN_SYS_VOLTAGE_MV,            /**< 最小系统电压: 7.168V */
-            .precharge_thresh_mv     = BATTERY_PARAM_2x_NMC_PRECHARGE_THRESH_MV,           /**< 预充电阈值电压: 6.0V */
-            .charge_current_ma       = BATTERY_PARAM_2x_NMC_CHARGE_CURRENT_MA,             /**< 典型快充充电电流: 2A */
-            .term_current_ma         = BATTERY_PARAM_2x_NMC_TERM_CURRENT_MA,               /**< 充电截止电流: 200mA */
-            .sysovp_thresh_mv        = BATTERY_PARAM_2x_NMC_SYSOVP_THRESH_MV               /**< 系统过压保护阈值: 9.4V */
-        },
-        /* 3S */
-        [BATTERY_CELLS_3S] = 
-        {
-            .chemistry               = BATTERY_CHEM_NMC,                                   /**< 化学类型: 三元锂 */
-            .cells                   = BATTERY_CELLS_3S,                                   /**< 电池节数: 3S */
-            .chg_voltage_mv          = BATTERY_PARAM_3x_NMC_CHG_VOLTAGE_MV,                /**< 总充电终止电压: 12.600V */
-            .chg_voltage_per_cell_mv = BATTERY_PARAM_3x_NMC_CHG_VOLTAGE_PER_CELL_MV,       /**< 单节充电终止电压: 4.20V */
-            .min_sys_voltage_mv      = BATTERY_PARAM_3x_NMC_MIN_SYS_VOLTAGE_MV,            /**< 最小系统电压: 10.752V */
-            .precharge_thresh_mv     = BATTERY_PARAM_3x_NMC_PRECHARGE_THRESH_MV,           /**< 预充电阈值电压: 9.0V */
-            .charge_current_ma       = BATTERY_PARAM_3x_NMC_CHARGE_CURRENT_MA,             /**< 典型快充充电电流: 2A */
-            .term_current_ma         = BATTERY_PARAM_3x_NMC_TERM_CURRENT_MA,               /**< 充电截止电流: 200mA */
-            .sysovp_thresh_mv        = BATTERY_PARAM_3x_NMC_SYSOVP_THRESH_MV               /**< 系统过压保护阈值: 13.6V */
-        },
-        /* 4S */
-        [BATTERY_CELLS_4S] = 
-        {
-            .chemistry               = BATTERY_CHEM_NMC,                                   /**< 化学类型: 三元锂 */
-            .cells                   = BATTERY_CELLS_4S,                                   /**< 电池节数: 4S */
-            .chg_voltage_mv          = BATTERY_PARAM_4x_NMC_CHG_VOLTAGE_MV,                /**< 总充电终止电压: 16.800V */
-            .chg_voltage_per_cell_mv = BATTERY_PARAM_4x_NMC_CHG_VOLTAGE_PER_CELL_MV,       /**< 单节充电终止电压: 4.20V */
-            .min_sys_voltage_mv      = BATTERY_PARAM_4x_NMC_MIN_SYS_VOLTAGE_MV,            /**< 最小系统电压: 14.336V */
-            .precharge_thresh_mv     = BATTERY_PARAM_4x_NMC_PRECHARGE_THRESH_MV,           /**< 预充电阈值电压: 12.0V */
-            .charge_current_ma       = BATTERY_PARAM_4x_NMC_CHARGE_CURRENT_MA,             /**< 典型快充充电电流: 2A */
-            .term_current_ma         = BATTERY_PARAM_4x_NMC_TERM_CURRENT_MA,               /**< 充电截止电流: 200mA */
-            .sysovp_thresh_mv        = BATTERY_PARAM_4x_NMC_SYSOVP_THRESH_MV               /**< 系统过压保护阈值: 17.8V */
-        }
+#define BATTERY_ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+
+#define PROFILE(_chem, _cells, _name, _vcell, _minsys_cell, _pre_cell)       \
+    {                                                                       \
+        .chemistry = (_chem),                                               \
+        .cells = (_cells),                                                  \
+        .chemistry_name = (_name),                                          \
+        .charge_voltage_per_cell_mv = (_vcell),                             \
+        .charge_voltage_mv = (uint16_t)((_vcell) * (uint16_t)(_cells)),     \
+        .min_system_voltage_mv =                                            \
+            (uint16_t)((_minsys_cell) * (uint16_t)(_cells)),                \
+        .precharge_threshold_mv =                                           \
+            (uint16_t)((_pre_cell) * (uint16_t)(_cells)),                   \
+        .recommended_charge_current_ma =                                    \
+            (uint16_t)(((_cells) == BATTERY_CELLS_1S) ? 1000U : 2000U),     \
+        .termination_current_ma =                                           \
+            (uint16_t)(((_cells) == BATTERY_CELLS_1S) ? 100U : 200U),       \
+        .pack_ovp_mv =                                                      \
+            (uint16_t)((uint16_t)((_vcell) * (uint16_t)(_cells)) + 1000U),  \
     }
+
+static const battery_profile_t s_profiles[] = {
+    PROFILE(BATTERY_CHEM_LIFEPO4, BATTERY_CELLS_1S, "LiFePO4", 3600U, 3072U, 3000U),
+    PROFILE(BATTERY_CHEM_LIFEPO4, BATTERY_CELLS_2S, "LiFePO4", 3600U, 3072U, 3000U),
+    PROFILE(BATTERY_CHEM_LIFEPO4, BATTERY_CELLS_3S, "LiFePO4", 3600U, 3072U, 3000U),
+    PROFILE(BATTERY_CHEM_LIFEPO4, BATTERY_CELLS_4S, "LiFePO4", 3600U, 3072U, 3000U),
+
+    PROFILE(BATTERY_CHEM_NMC, BATTERY_CELLS_1S, "NMC", 4200U, 3584U, 3000U),
+    PROFILE(BATTERY_CHEM_NMC, BATTERY_CELLS_2S, "NMC", 4200U, 3584U, 3000U),
+    PROFILE(BATTERY_CHEM_NMC, BATTERY_CELLS_3S, "NMC", 4200U, 3584U, 3000U),
+    PROFILE(BATTERY_CHEM_NMC, BATTERY_CELLS_4S, "NMC", 4200U, 3584U, 3000U),
+
+    PROFILE(BATTERY_CHEM_LIPO, BATTERY_CELLS_1S, "LiPo", 4200U, 3584U, 3000U),
+    PROFILE(BATTERY_CHEM_LIPO, BATTERY_CELLS_2S, "LiPo", 4200U, 3584U, 3000U),
+    PROFILE(BATTERY_CHEM_LIPO, BATTERY_CELLS_3S, "LiPo", 4200U, 3584U, 3000U),
+    PROFILE(BATTERY_CHEM_LIPO, BATTERY_CELLS_4S, "LiPo", 4200U, 3584U, 3000U),
+
+    PROFILE(BATTERY_CHEM_LCO, BATTERY_CELLS_1S, "LCO", 4200U, 3584U, 3000U),
+    PROFILE(BATTERY_CHEM_LCO, BATTERY_CELLS_2S, "LCO", 4200U, 3584U, 3000U),
+    PROFILE(BATTERY_CHEM_LCO, BATTERY_CELLS_3S, "LCO", 4200U, 3584U, 3000U),
+    PROFILE(BATTERY_CHEM_LCO, BATTERY_CELLS_4S, "LCO", 4200U, 3584U, 3000U),
+
+    PROFILE(BATTERY_CHEM_LTO, BATTERY_CELLS_1S, "LTO", 2800U, 2048U, 1800U),
+    PROFILE(BATTERY_CHEM_LTO, BATTERY_CELLS_2S, "LTO", 2800U, 2048U, 1800U),
+    PROFILE(BATTERY_CHEM_LTO, BATTERY_CELLS_3S, "LTO", 2800U, 2048U, 1800U),
+    PROFILE(BATTERY_CHEM_LTO, BATTERY_CELLS_4S, "LTO", 2800U, 2048U, 1800U),
 };
 
+const battery_profile_t *battery_get_profile(battery_chemistry_t chemistry,
+                                             battery_cell_count_t cells)
+{
+    size_t i;
 
+    if ((chemistry == BATTERY_CHEM_INVALID) ||
+        (cells == BATTERY_CELLS_INVALID)) {
+        return NULL;
+    }
+
+    for (i = 0U; i < BATTERY_ARRAY_SIZE(s_profiles); ++i) {
+        if ((s_profiles[i].chemistry == chemistry) &&
+            (s_profiles[i].cells == cells)) {
+            return &s_profiles[i];
+        }
+    }
+
+    return NULL;
+}
+
+battery_ret_t battery_copy_profile(battery_chemistry_t chemistry,
+                                   battery_cell_count_t cells,
+                                   battery_profile_t *profile_out)
+{
+    const battery_profile_t *profile;
+
+    if (profile_out == NULL) {
+        return BATTERY_RET_NULL;
+    }
+
+    profile = battery_get_profile(chemistry, cells);
+    if (profile == NULL) {
+        return BATTERY_RET_NOT_FOUND;
+    }
+
+    *profile_out = *profile;
+    return BATTERY_RET_OK;
+}
+
+size_t battery_profile_count(void)
+{
+    return BATTERY_ARRAY_SIZE(s_profiles);
+}
+
+const char *battery_chemistry_name(battery_chemistry_t chemistry)
+{
+    switch (chemistry) {
+    case BATTERY_CHEM_LIFEPO4:
+        return "LiFePO4";
+    case BATTERY_CHEM_NMC:
+        return "NMC";
+    case BATTERY_CHEM_LIPO:
+        return "LiPo";
+    case BATTERY_CHEM_LCO:
+        return "LCO";
+    case BATTERY_CHEM_LTO:
+        return "LTO";
+    default:
+        return "Invalid";
+    }
+}
+
+uint8_t battery_cells_value(battery_cell_count_t cells)
+{
+    if ((cells < BATTERY_CELLS_1S) || (cells > BATTERY_CELLS_4S)) {
+        return 0U;
+    }
+
+    return (uint8_t)cells;
+}

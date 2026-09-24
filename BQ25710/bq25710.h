@@ -11,7 +11,7 @@
  * | 序号 | 模块          | 说明                                       |
  * |------|---------------|--------------------------------------------|
  * |  1   | 模式管理      | 运行时模式切换 (IDLE/CHARGING/OTG/PTM/...)  |
- * |  2   | 充电管理      | 7阶段状态机, LiFePO4/NMC 1S~4S 全参数支持  |
+ * |  2   | 充电管理      | 7阶段状态机, Battery/TI profile 参数支持    |
  * |  3   | OTG 管理      | 反向输出 5V/9V/12V/15V/20V, 电压斜率       |
  * |  4   | 输入功率管理  | IDPM, VDPM, ILIM_HIZ, ICO, 两级峰值功率    |
  * |  5   | PTM 直通模式  | 适配器直通系统, 绕过开关损耗                |
@@ -34,7 +34,7 @@
 
 #include <stdint.h>
 #include "bq25710_abstraction.h"
-#include "battery.h"
+#include "battery_ti.h"
 
 #ifndef __BIT
 #define __BIT(x) (1 << (x))
@@ -247,7 +247,7 @@ typedef struct {
     uint8_t                  ico_done;                  /**< ICO 是否已完成 */
 
     /* 充电参数 */
-    battery_params_t         *batt_params;              /**< 当前电池参数 */
+    const battery_ti_bq25710_params_t *batt_params;     /**< 当前电池参数 */
     uint16_t                 charge_voltage_set_mv;     /**< 充电电压设定值 (mV) */
     uint16_t                 charge_current_set_ma;     /**< 充电电流设定值 (mA) */
     uint16_t                 input_current_limit_ma;    /**< 输入电流限制 (mA) */
@@ -276,7 +276,7 @@ typedef struct {
 #define BQ25710_CV_TIMEOUT_MS_DEFAULT           (2 * 3600 * 1000)       /** CV 超时默认时间 */
 
 typedef struct {
-    battery_params_t         *params;                   /**< 当前电池参数 */
+    battery_ti_bq25710_params_t params;                 /**< 当前电池参数 */
     bq25710_charge_stage_t   stage;                     /**< 当前充电阶段 */
     battery_chemistry_t      chemistry;                 /**< 化学类型 */
     battery_cell_count_t     cells;                     /**< 节数 */
@@ -421,7 +421,7 @@ bq25710_err_t bq25710_charge_run(void);
 bq25710_charge_stage_t bq25710_charge_get_stage(void);
 
 /**
- * @brief 获取电池参数表 (按化学类型和节数索引)
+ * @brief 获取 BQ25710 可直接使用的电池参数
  * @param chemistry 化学类型
  * @param cells     串联节数
  * @param params_out 输出参数指针
@@ -429,7 +429,7 @@ bq25710_charge_stage_t bq25710_charge_get_stage(void);
  */
 bq25710_err_t bq25710_get_battery_params(battery_chemistry_t chemistry,
                                          battery_cell_count_t cells,
-                                         battery_params_t *params_out);
+                                         battery_ti_bq25710_params_t *params_out);
 
 /* ---------- OTG 管理 ---------- */
 
