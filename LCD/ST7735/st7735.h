@@ -105,6 +105,7 @@ int32_t st7735_init (uint32_t ColorCoding, uint32_t Orientation);
 int32_t st7735_deinit (void);
 int32_t st7735_write_reg (uint8_t cmd, uint8_t *data, uint32_t len);
 int32_t st7735_write_data (uint8_t *data, uint32_t len);
+uint8_t st7735_is_busy(void);
 
 void lcd_set_window (uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
 void lcd_draw_point (uint16_t x, uint16_t y, uint16_t color);
