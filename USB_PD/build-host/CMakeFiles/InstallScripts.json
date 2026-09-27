@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"E:/Yusaka/varch/Embed/drivers/USB_PD/build-host/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

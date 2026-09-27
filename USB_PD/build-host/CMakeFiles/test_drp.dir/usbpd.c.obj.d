@@ -1,0 +1,25 @@
+CMakeFiles/test_drp.dir/usbpd.c.obj: \
+ E:\Yusaka\varch\Embed\drivers\USB_PD\usbpd.c \
+ E:/Yusaka/varch/Embed/drivers/USB_PD/inc/usbpd.h \
+ E:/Yusaka/varch/Embed/drivers/USB_PD/inc/pd_sink.h \
+ E:/Yusaka/varch/Embed/drivers/USB_PD/inc/usbpd_def.h \
+ C:/Software/mingw64/lib/gcc/x86_64-w64-mingw32/8.1.0/include/stdint.h \
+ C:/Software/mingw64/x86_64-w64-mingw32/include/stdint.h \
+ C:/Software/mingw64/x86_64-w64-mingw32/include/crtdefs.h \
+ C:/Software/mingw64/x86_64-w64-mingw32/include/_mingw.h \
+ C:/Software/mingw64/x86_64-w64-mingw32/include/_mingw_mac.h \
+ C:/Software/mingw64/x86_64-w64-mingw32/include/_mingw_secapi.h \
+ C:/Software/mingw64/x86_64-w64-mingw32/include/vadefs.h \
+ C:/Software/mingw64/x86_64-w64-mingw32/include/sdks/_mingw_directx.h \
+ C:/Software/mingw64/x86_64-w64-mingw32/include/sdks/_mingw_ddk.h \
+ C:/Software/mingw64/lib/gcc/x86_64-w64-mingw32/8.1.0/include/stddef.h \
+ C:/Software/mingw64/x86_64-w64-mingw32/include/stddef.h \
+ E:/Yusaka/varch/Embed/drivers/USB_PD/inc/usbpd_dpm.h \
+ E:/Yusaka/varch/Embed/drivers/USB_PD/inc/pd_source.h \
+ E:/Yusaka/varch/Embed/drivers/USB_PD/inc/usbpd_message.h \
+ E:/Yusaka/varch/Embed/drivers/USB_PD/common/message_buffer/message_buffer.h \
+ E:/Yusaka/varch/Embed/drivers/USB_PD/platform/ch32x035/usbpd_phy_ch32x035.h \
+ E:/Yusaka/varch/Embed/drivers/USB_PD/inc/usbpd_def.h \
+ E:/Yusaka/varch/Embed/drivers/USB_PD/inc/usbpd_protocol.h \
+ C:/Software/mingw64/x86_64-w64-mingw32/include/string.h \
+ C:/Software/mingw64/x86_64-w64-mingw32/include/sec_api/string_s.h

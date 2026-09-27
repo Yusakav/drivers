@@ -1,0 +1,10 @@
+E:/Yusaka/varch/Embed/drivers/USB_PD/build-host/CMakeFiles/test_message_buffer.dir
+E:/Yusaka/varch/Embed/drivers/USB_PD/build-host/CMakeFiles/test_types.dir
+E:/Yusaka/varch/Embed/drivers/USB_PD/build-host/CMakeFiles/test_frame.dir
+E:/Yusaka/varch/Embed/drivers/USB_PD/build-host/CMakeFiles/test_protocol.dir
+E:/Yusaka/varch/Embed/drivers/USB_PD/build-host/CMakeFiles/test_sink.dir
+E:/Yusaka/varch/Embed/drivers/USB_PD/build-host/CMakeFiles/test_source.dir
+E:/Yusaka/varch/Embed/drivers/USB_PD/build-host/CMakeFiles/test_drp.dir
+E:/Yusaka/varch/Embed/drivers/USB_PD/build-host/CMakeFiles/test.dir
+E:/Yusaka/varch/Embed/drivers/USB_PD/build-host/CMakeFiles/edit_cache.dir
+E:/Yusaka/varch/Embed/drivers/USB_PD/build-host/CMakeFiles/rebuild_cache.dir
