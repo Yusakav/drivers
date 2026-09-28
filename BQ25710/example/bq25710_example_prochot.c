@@ -412,21 +412,21 @@ void prochot_scenario_demo(void)
 
 #ifdef EXAMPLE_PROCHOT_MAIN_ENABLED
 
-#include "soft_i2c.h"
+#include "bq25710_soft_i2c_adapter.h"
 
 /* 外部 I2C 总线实例 (由用户硬件初始化代码提供) */
-extern struct soft_i2c_bus_t g_i2c_bus;
+extern soft_i2c_bus_t g_i2c_bus;
 
 int main(void)
 {
-    int8_t ret;
+    bq25710_err_t ret;
     prochot_config_t cfg;
 
     printf("BQ25710 PROCHOT 示例 - 启动\n");
 
     /* 1. 初始化驱动 */
-    ret = bq25710_init(&g_i2c_bus);
-    if (ret != BQ25710_OK) {
+    ret = bq25710_soft_i2c_init(&g_i2c_bus, SOFT_SMBUS_PEC_DISABLED);
+    if (ret != BQ25710_ERR_OK) {
         printf("驱动初始化失败 (ret=%d)\n", ret);
         return -1;
     }

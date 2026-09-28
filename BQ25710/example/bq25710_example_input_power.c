@@ -537,17 +537,17 @@ void input_power_demo(void)
 
 #ifdef EXAMPLE_INPUT_POWER_MAIN_ENABLED
 
-#include "soft_i2c.h"
-extern struct soft_i2c_bus_t g_i2c_bus;
+#include "bq25710_soft_i2c_adapter.h"
+extern soft_i2c_bus_t g_i2c_bus;
 
 int main(void)
 {
-    int8_t ret;
+    bq25710_err_t ret;
 
     printf("BQ25710 输入功率管理示例\n");
 
-    ret = bq25710_init(&g_i2c_bus);
-    if (ret != BQ25710_OK) {
+    ret = bq25710_soft_i2c_init(&g_i2c_bus, SOFT_SMBUS_PEC_DISABLED);
+    if (ret != BQ25710_ERR_OK) {
         printf("驱动初始化失败\n");
         return -1;
     }

@@ -1,68 +1,112 @@
+/**
+* @file usbpd_protocol.c
+* @brief USB Power Delivery（USB PD）协议层实现
+*
+* 所属模块：USB PD 协议栈（驱动层，与具体控制器/平台无关）。
+* 职责：
+*   - 构造/解析报文头，维护各 SOP 通道的 MessageID 收发序号与去重；
+*   - 发送后等待 GoodCRC，超时按 USBPD_N_RETRY_COUNT 重发并上报事件；
+*   - 扩展消息分块发送/接收（Chunking），自动向对端请求下一分块；
+*   - 处理 Soft Reset / Hard Reset / 接收溢出等复位流程。
+*
+* 事件经 usbpd_protocol_event_e 回调上报上层；由调用方周期调用
+* usbpd_protocol_task()（毫秒节拍）驱动协议层运行。
+*/
 #include "usbpd_protocol.h"
 #include "usbpd_phy_ch32x035.h"
 #include <string.h>
 
-#define USBPD_GOODCRC_TIMEOUT_MS 2U
+/* ===== 协议层私有参数 ===== */
+#define USBPD_GOODCRC_TIMEOUT_MS 2U  /* GoodCRC 等待超时（毫秒，覆盖 tReceive 与帧间隔） */
 
+/* ===== 协议层私有类型与全局状态 ===== */
+/** @brief USB PD 协议层运行上下文（全局单例） */
 struct usbpd_protocol_t
 {
-    usbpd_protocol_handler_t handler;
-    void *handler_arg;
-    uint8_t tx_id[3];
-    uint8_t rx_id[3];
-    uint8_t rx_id_valid : 3;
-    uint8_t awaiting_crc : 1;
-    uint8_t ext_tx_active : 1;
-    uint8_t ext_rx_active : 1;
-    uint8_t reserved : 2;
-    uint8_t awaiting_sop;
-    uint8_t awaiting_id;
-    uint8_t tx_retry_count;
-    uint8_t tx_raw_len;
-    uint8_t tx_raw[USBPD_MAX_FRAME_LEN];
-    uint8_t revision;
-    uint8_t power_role;
-    uint8_t data_role;
-    uint8_t ext_tx_type;
-    uint8_t ext_tx_sop;
-    uint8_t ext_tx_chunk;
-    uint8_t ext_tx_request_pending : 1;
-    uint8_t ext_tx_wait_request : 1;
-    uint8_t ext_rx_request_pending : 1;
-    uint8_t ext_rx_wait_chunk : 1;
-    uint8_t reserved_flags : 4;
-    uint8_t ext_rx_type;
-    uint8_t ext_rx_chunk;
-    uint8_t ext_rx_sop;
-    uint16_t ext_tx_length;
-    uint16_t ext_tx_offset;
-    uint16_t ext_rx_length;
-    uint16_t ext_rx_offset;
-    uint32_t deadline_ms;
-    uint32_t ext_deadline_ms;
-    uint32_t now_ms;
-    uint8_t ext_tx_data[USBPD_EXT_DATA_MAX];
-    uint8_t ext_rx_data[USBPD_EXT_DATA_MAX];
+    usbpd_protocol_handler_t handler;        /* 协议事件回调函数 */
+    void *handler_arg;                       /* 事件回调用户参数 */
+    uint8_t tx_id[3];                        /* 各 SOP 通道发送 MessageID（0..7 循环） */
+    uint8_t rx_id[3];                        /* 各 SOP 通道最近接收 MessageID */
+    uint8_t rx_id_valid : 3;                 /* Bit0..2 : rx_id 有效性位图（按 SOP 索引置位） */
+    uint8_t awaiting_crc : 1;                /* 已发送待 GoodCRC 确认标志 */
+    uint8_t ext_tx_active : 1;               /* 扩展消息分块发送进行中 */
+    uint8_t ext_rx_active : 1;               /* 扩展消息分块接收进行中 */
+    uint8_t reserved : 2;                    /* 保留位 */
+    uint8_t awaiting_sop;                    /* 待确认帧的 SOP 类型 */
+    uint8_t awaiting_id;                     /* 待确认帧的 MessageID */
+    uint8_t tx_retry_count;                  /* 当前帧已重发次数 */
+    uint8_t tx_raw_len;                      /* 待确认帧长度（字节，含 2 字节报文头） */
+    uint8_t tx_raw[USBPD_MAX_FRAME_LEN];     /* 待确认帧原始内容（超时重发用） */
+    uint8_t revision;                        /* 当前协商协议版本（见 usbpd_revision_e） */
+    uint8_t power_role;                      /* 电源角色（见 usbpd_power_role_e） */
+    uint8_t data_role;                       /* 数据角色（见 usbpd_data_role_e） */
+    uint8_t ext_tx_type;                     /* 扩展发送消息类型（见 usbpd_extended_e） */
+    uint8_t ext_tx_sop;                      /* 扩展发送 SOP 类型 */
+    uint8_t ext_tx_chunk;                    /* 扩展发送下一分块序号 */
+    uint8_t ext_tx_request_pending : 1;      /* 已收到 Chunk Request，待发送下一分块 */
+    uint8_t ext_tx_wait_request : 1;         /* 已发分块，等待对端 Chunk Request */
+    uint8_t ext_rx_request_pending : 1;      /* 待向对端发送 Chunk Request */
+    uint8_t ext_rx_wait_chunk : 1;           /* 已发 Chunk Request，等待对端数据块 */
+    uint8_t reserved_flags : 4;              /* 保留位 */
+    uint8_t ext_rx_type;                     /* 扩展接收消息类型（见 usbpd_extended_e） */
+    uint8_t ext_rx_chunk;                    /* 扩展接收下一分块序号 */
+    uint8_t ext_rx_sop;                      /* 扩展接收 SOP 类型 */
+    uint16_t ext_tx_length;                  /* 扩展发送数据总长度（字节） */
+    uint16_t ext_tx_offset;                  /* 扩展发送已发送偏移（字节） */
+    uint16_t ext_rx_length;                  /* 扩展接收数据总长度（字节） */
+    uint16_t ext_rx_offset;                  /* 扩展接收已接收偏移（字节） */
+    uint32_t deadline_ms;                    /* GoodCRC 等待截止时间（毫秒） */
+    uint32_t ext_deadline_ms;                /* 分块传输等待截止时间（毫秒） */
+    uint32_t now_ms;                         /* 最近一次 task 调度时的系统时间（毫秒） */
+    uint8_t ext_tx_data[USBPD_EXT_DATA_MAX]; /* 扩展发送数据缓冲 */
+    uint8_t ext_rx_data[USBPD_EXT_DATA_MAX]; /* 扩展接收重组缓冲 */
 };
 
-static struct usbpd_protocol_t g_protocol;
+static struct usbpd_protocol_t g_protocol;   /* 协议层全局上下文单例 */
 
+/* ===== 内部函数 ===== */
+/**
+ * @brief  将 SOP 类型映射为 MessageID 数组索引
+ *
+ * 仅 SOP / SOP' / SOP'' 三类通道维护 MessageID，其余值统一映射到索引 0。
+ *
+ * @param sop  SOP 类型（见 usbpd_sop_e）
+ * @return MessageID 数组索引（0..2）
+ */
 static uint8_t sop_index(uint8_t sop)
 {
     return (sop <= USBPD_SOP_DPRIME) ? sop : 0U;
 }
 
+/**
+ * @brief  判断截止时间是否已到（毫秒计时回绕安全）
+ *
+ * @param now  当前系统时间（毫秒）
+ * @param deadline  截止时间（毫秒）
+ * @return 1=已到期，0=未到期
+ */
 static uint8_t deadline_expired(uint32_t now, uint32_t deadline)
 {
     return ((int32_t)(now - deadline) >= 0);
 }
 
+/**
+ * @brief  向上层回调上报协议事件
+ *
+ * @param event  事件类型（见 usbpd_protocol_event_e）
+ * @param msg  事件关联报文（可为 NULL）
+ */
 static void protocol_emit(uint8_t event, const struct usbpd_protocol_msg_t *msg)
 {
     if (g_protocol.handler != 0)
         g_protocol.handler(event, msg, g_protocol.handler_arg);
 }
 
+/**
+ * @brief  上报本端发送帧已被 GoodCRC 确认事件（USBPD_PROTOCOL_TX_GOODCRC）
+ *
+ * 依据待确认帧缓存恢复报文头与负载内容，构造事件消息后回调上报。
+ */
 static void protocol_emit_tx_goodcrc(void)
 {
     struct usbpd_protocol_msg_t msg;
@@ -74,6 +118,17 @@ static void protocol_emit_tx_goodcrc(void)
     protocol_emit(USBPD_PROTOCOL_TX_GOODCRC, &msg);
 }
 
+/**
+ * @brief  构造 USB PD 报文头
+ *
+ * 填充类型、版本、MessageID、数据对象数与扩展标志；SOP 帧额外携带电源/数据角色。
+ *
+ * @param header  输出报文头
+ * @param sop  SOP 类型（见 usbpd_sop_e）
+ * @param type  消息类型（见 usbpd_ctrl_e / usbpd_data_e / usbpd_extended_e）
+ * @param objects  数据对象数量（0..7）
+ * @param extended  扩展消息标志（1=扩展消息）
+ */
 static void protocol_fill_header(union usbpd_header_u *header, uint8_t sop, uint8_t type, uint8_t objects,
                                  uint8_t extended)
 {
@@ -91,6 +146,18 @@ static void protocol_fill_header(union usbpd_header_u *header, uint8_t sop, uint
     }
 }
 
+/**
+ * @brief  组帧并交由 PHY 层发送，随后进入等待 GoodCRC 状态
+ *
+ * 发送成功时缓存原始帧用于超时重发，并启动 GoodCRC 等待定时。
+ *
+ * @param sop  SOP 类型（见 usbpd_sop_e）
+ * @param header  已构造的报文头
+ * @param payload  负载数据（无负载时可为 NULL）
+ * @param bytes  负载字节数（0..28，须为 4 的倍数）
+ * @param now_ms  当前系统时间（毫秒）
+ * @return USBPD_OK 发起成功；USBPD_ERR 参数非法；USBPD_BUSY PHY 忙
+ */
 static int protocol_send_frame(uint8_t sop, union usbpd_header_u header, const uint8_t *payload, uint8_t bytes,
                                uint32_t now_ms)
 {
@@ -116,6 +183,15 @@ static int protocol_send_frame(uint8_t sop, union usbpd_header_u header, const u
     return ret;
 }
 
+/**
+ * @brief  发送扩展消息的当前分块（Chunked Extended Message）
+ *
+ * 按扩展消息头与剩余长度切分数据，单块最多 USBPD_EXT_CHUNK_DATA_MAX 字节，
+ * 发送成功后推进发送偏移与分块序号。
+ *
+ * @param now_ms  当前系统时间（毫秒）
+ * @return USBPD_OK 已发起发送；USBPD_BUSY 非发送时机或 PHY 忙
+ */
 static int protocol_send_chunk(uint32_t now_ms)
 {
     union usbpd_header_u header;
@@ -147,6 +223,14 @@ static int protocol_send_chunk(uint32_t now_ms)
     return USBPD_BUSY;
 }
 
+/**
+ * @brief  向对端发送 Chunk Request，请求扩展消息的下一分块
+ *
+ * 发送成功后进入等待数据块状态，并启动 tChunkSenderResponse 超时定时。
+ *
+ * @param now_ms  当前系统时间（毫秒）
+ * @return USBPD_OK 已发起请求；USBPD_BUSY 非请求时机或 PHY 忙
+ */
 static int protocol_request_next_chunk(uint32_t now_ms)
 {
     union usbpd_header_u header;
@@ -171,6 +255,14 @@ static int protocol_request_next_chunk(uint32_t now_ms)
     return USBPD_BUSY;
 }
 
+/**
+ * @brief  处理接收到的扩展消息（分块重组与 Chunk Request 应答）
+ *
+ * 校验扩展消息头合法性；分块数据按分块序号写入接收重组缓冲；尚未收完时
+ * 置位 Chunk Request 待发标志，全部收完后以 USBPD_PROTOCOL_EXT_RX 事件上报。
+ *
+ * @param frame  接收到的原始帧
+ */
 static void protocol_handle_extended(const struct usbpd_frame_t *frame)
 {
     union usbpd_ext_header_u ext;
@@ -256,6 +348,14 @@ static void protocol_handle_extended(const struct usbpd_frame_t *frame)
     protocol_emit(USBPD_PROTOCOL_EXT_RX, &msg);
 }
 
+/**
+ * @brief  协议层帧接收处理入口
+ *
+ * 处理 Hard Reset、GoodCRC 确认、MessageID 去重与版本协商、Soft Reset；
+ * 扩展消息转入分块处理，其余普通报文以 USBPD_PROTOCOL_RX 事件上报。
+ *
+ * @param frame  接收到的原始帧
+ */
 static void protocol_handle_rx(const struct usbpd_frame_t *frame)
 {
     struct usbpd_protocol_msg_t msg;
@@ -312,6 +412,14 @@ static void protocol_handle_rx(const struct usbpd_frame_t *frame)
     protocol_emit(USBPD_PROTOCOL_RX, &msg);
 }
 
+/* ===== 对外接口 ===== */
+/**
+ * @brief  配置协议层版本与角色，并同步设置 PHY 层角色
+ *
+ * @param revision  协议版本（见 usbpd_revision_e，大于 Rev3.0 按 Rev3.0 处理）
+ * @param power_role  电源角色（0=Sink，非 0=Source）
+ * @param data_role  数据角色（0=UFP，非 0=DFP）
+ */
 void usbpd_protocol_configure(uint8_t revision, uint8_t power_role, uint8_t data_role)
 {
     g_protocol.revision = (revision <= USBPD_REV30) ? revision : USBPD_REV30;
@@ -320,6 +428,14 @@ void usbpd_protocol_configure(uint8_t revision, uint8_t power_role, uint8_t data
     usbpd_phy_set_roles(g_protocol.power_role, g_protocol.data_role);
 }
 
+/**
+ * @brief  发送控制消息（无数据对象）
+ *
+ * @param sop  SOP 类型（见 usbpd_sop_e）
+ * @param type  控制消息类型（见 usbpd_ctrl_e）
+ * @param now_ms  当前系统时间（毫秒）
+ * @return USBPD_OK 发起成功；USBPD_ERR_PARAM 参数非法；USBPD_BUSY 上一帧尚未被确认
+ */
 int usbpd_protocol_send_ctrl(uint8_t sop, uint8_t type, uint32_t now_ms)
 {
     union usbpd_header_u header;
@@ -331,6 +447,16 @@ int usbpd_protocol_send_ctrl(uint8_t sop, uint8_t type, uint32_t now_ms)
     return protocol_send_frame(sop, header, 0, 0U, now_ms);
 }
 
+/**
+ * @brief  发送数据消息（携带数据对象）
+ *
+ * @param sop  SOP 类型（见 usbpd_sop_e）
+ * @param type  数据消息类型（见 usbpd_data_e）
+ * @param objects  数据对象数组（小端序 32 位字）
+ * @param count  数据对象数量（1..USBPD_MAX_DATA_OBJ）
+ * @param now_ms  当前系统时间（毫秒）
+ * @return USBPD_OK 发起成功；USBPD_ERR_PARAM 参数非法；USBPD_BUSY 上一帧尚未被确认
+ */
 int usbpd_protocol_send_data(uint8_t sop, uint8_t type, const uint32_t *objects, uint8_t count, uint32_t now_ms)
 {
     union usbpd_header_u header;
@@ -344,11 +470,33 @@ int usbpd_protocol_send_data(uint8_t sop, uint8_t type, const uint32_t *objects,
     return protocol_send_frame(sop, header, (const uint8_t *)objects, (uint8_t)(count * 4U), now_ms);
 }
 
+/**
+ * @brief  通过 SOP 通道发送扩展消息（自动分块）
+ *
+ * @param type  扩展消息类型（见 usbpd_extended_e）
+ * @param data  扩展数据缓冲
+ * @param length  数据长度（1..USBPD_EXT_DATA_MAX 字节）
+ * @param now_ms  当前系统时间（毫秒）
+ * @return USBPD_OK 首块发起成功；USBPD_ERR_PARAM 参数非法；USBPD_BUSY 发送未就绪
+ */
 int usbpd_protocol_send_extended(uint8_t type, const uint8_t *data, uint16_t length, uint32_t now_ms)
 {
     return usbpd_protocol_send_extended_sop(USBPD_SOP, type, data, length, now_ms);
 }
 
+/**
+ * @brief  通过指定 SOP 通道发送扩展消息（自动分块）
+ *
+ * 长度超过 USBPD_EXT_CHUNK_DATA_MAX 时自动分块，每块发出后等待对端
+ * Chunk Request 再继续发送下一块。
+ *
+ * @param sop  SOP 类型（见 usbpd_sop_e）
+ * @param type  扩展消息类型（见 usbpd_extended_e）
+ * @param data  扩展数据缓冲
+ * @param length  数据长度（1..USBPD_EXT_DATA_MAX 字节）
+ * @param now_ms  当前系统时间（毫秒）
+ * @return USBPD_OK 首块发起成功；USBPD_ERR_PARAM 参数非法；USBPD_BUSY 发送未就绪
+ */
 int usbpd_protocol_send_extended_sop(uint8_t sop, uint8_t type, const uint8_t *data, uint16_t length, uint32_t now_ms)
 {
     if ((sop > USBPD_SOP_DPRIME) || (type == USBPD_EXT_RESERVED) ||
@@ -367,6 +515,14 @@ int usbpd_protocol_send_extended_sop(uint8_t sop, uint8_t type, const uint8_t *d
     return protocol_send_chunk(now_ms);
 }
 
+/**
+ * @brief  发送 Extended Control 消息（两字节扩展控制数据块）
+ *
+ * @param subtype  扩展控制类型（见 usbpd_extended_control_e）
+ * @param data  与类型相关的数据字节
+ * @param now_ms  当前系统时间（毫秒）
+ * @return USBPD_OK 首块发起成功；USBPD_ERR_PARAM 参数非法；USBPD_BUSY 发送未就绪
+ */
 int usbpd_protocol_send_extended_control(uint8_t subtype, uint8_t data, uint32_t now_ms)
 {
     const uint8_t ecdb[2] = {subtype, data};
@@ -375,12 +531,25 @@ int usbpd_protocol_send_extended_control(uint8_t subtype, uint8_t data, uint32_t
     return usbpd_protocol_send_extended(USBPD_EXT_CONTROL, ecdb, sizeof(ecdb), now_ms);
 }
 
+/**
+ * @brief  发送 Hard Reset 信号（经 PHY 层发送，不等 GoodCRC）
+ *
+ * 发送前放弃当前待确认帧。
+ *
+ * @param now_ms  当前系统时间（毫秒）
+ * @return USBPD_OK 发起成功；USBPD_BUSY PHY 忙
+ */
 int usbpd_protocol_send_hard_reset(uint32_t now_ms)
 {
     g_protocol.awaiting_crc = 0U;
     return usbpd_phy_send(USBPD_SOP_HARD_RESET, 0, 0U, now_ms);
 }
 
+/**
+ * @brief  复位协议层运行状态
+ *
+ * 保留事件回调与版本/角色配置，清空 MessageID、收发缓冲与全部扩展消息状态。
+ */
 void usbpd_protocol_reset(void)
 {
     uint8_t keep_handler = (g_protocol.handler != 0);
@@ -400,6 +569,14 @@ void usbpd_protocol_reset(void)
     g_protocol.data_role = data_role;
 }
 
+/**
+ * @brief  初始化协议层，注册事件回调并复位全部状态
+ *
+ * 默认协议版本为 Rev3.0，角色需另行调用 usbpd_protocol_configure() 配置。
+ *
+ * @param handler  协议事件回调（事件类型见 usbpd_protocol_event_e）
+ * @param arg  回调用户参数
+ */
 void usbpd_protocol_init(usbpd_protocol_handler_t handler, void *arg)
 {
     memset(&g_protocol, 0, sizeof(g_protocol));
@@ -408,6 +585,15 @@ void usbpd_protocol_init(usbpd_protocol_handler_t handler, void *arg)
     g_protocol.revision = USBPD_REV30;
 }
 
+/**
+ * @brief  协议层周期任务（需在主循环中以毫秒节拍调用）
+ *
+ * 依次处理：接收溢出恢复、帧接收分发、GoodCRC 超时重发（超过
+ * USBPD_N_RETRY_COUNT 上报 USBPD_PROTOCOL_TX_TIMEOUT）、扩展消息分块
+ * 收发调度与分块超时处理。
+ *
+ * @param now_ms  当前系统时间（毫秒）
+ */
 void usbpd_protocol_task(uint32_t now_ms)
 {
     struct usbpd_frame_t frame;

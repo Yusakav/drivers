@@ -1,99 +1,153 @@
+/**
+* @file pd_sink.c
+* @brief USB PD Sink（受电方）设备策略层实现
+*
+* 所属模块：USB PD 协议栈（策略层，基于协议层实现 Sink 状态机）。
+* 对应头文件：pd_sink.h；依赖：usbpd_protocol.h / usbpd_phy_ch32x035.h / usbpd_dpm.h。
+*
+* 本文件实现：
+*   - Sink 状态机（11 状态）的完整迁移逻辑；
+*   - Source PDO 收集、PDO 选择与 Request/RDO 构造（支持 Fixed/Battery/Variable/PPS/AVS/EPR AVS）；
+*   - EPR 模式进入/退出流程、EPR KeepAlive；
+*   - Soft Reset / Hard Reset / Error Recovery 处理；
+*   - DPM 消息回调包装、事件回调包装、扩展消息响应填充；
+*   - 应用层请求接口：pd_sink_is_attached / pd_sink_request / pd_sink_get_status / pd_sink_send_*。
+*
+* 注意：所有内部静态函数均以 sink_ 前缀命名，不对外暴露。
+*/
 #include "pd_sink.h"
 #include "usbpd_phy_ch32x035.h"
 #include "usbpd_protocol.h"
 #include "usbpd_message.h"
 #include <string.h>
 
-#define PD_SINK_CC_DEBOUNCE_MS 100U
-#define PD_SINK_WAIT_CAP_MS USBPD_T_SINK_WAIT_CAP_MIN_MS
-#define PD_SINK_SENDER_RESPONSE_MS USBPD_T_SENDER_RESPONSE_MAX_MS
-#define PD_SINK_PS_TRANSITION_MS USBPD_T_PS_TRANSITION_SPR_MS
-#define PD_SINK_ERROR_RECOVERY_MS 30U
-#define PD_SINK_EPR_KEEPALIVE_MS USBPD_T_SINK_EPR_KEEPALIVE_MS
-#define PD_SINK_MAX_WAIT_RETRIES 2U
+/* ===== Sink 策略层私有时序参数 ===== */
+#define PD_SINK_CC_DEBOUNCE_MS 100U                              /* CC 去抖动时间（毫秒） */
+#define PD_SINK_WAIT_CAP_MS USBPD_T_SINK_WAIT_CAP_MIN_MS        /* 等待 Source_Capabilities 下限（毫秒） */
+#define PD_SINK_SENDER_RESPONSE_MS USBPD_T_SENDER_RESPONSE_MAX_MS /* 对端响应最大等待（毫秒） */
+#define PD_SINK_PS_TRANSITION_MS USBPD_T_PS_TRANSITION_SPR_MS   /* SPR 模式电源转换时间（毫秒） */
+#define PD_SINK_ERROR_RECOVERY_MS 30U                            /* 错误恢复等待时间（毫秒） */
+#define PD_SINK_EPR_KEEPALIVE_MS USBPD_T_SINK_EPR_KEEPALIVE_MS  /* EPR KeepAlive 发送间隔（毫秒） */
+#define PD_SINK_MAX_WAIT_RETRIES 2U                              /* Wait 消息重试次数上限 */
 
+/* ===== 内部枚举 ===== */
+/** @brief PDO 选择类型（RDO 构造时决定使用 rdo.fixed / rdo.pps / rdo.avs 等 union 分支） */
 enum pd_sink_select_e
 {
-    PD_SELECT_NONE = 0U,
-    PD_SELECT_FIXED,
-    PD_SELECT_VARIABLE,
-    PD_SELECT_BATTERY,
-    PD_SELECT_PPS,
-    PD_SELECT_AVS
+    PD_SELECT_NONE = 0U,    /* 未选择 */
+    PD_SELECT_FIXED,        /* Fixed PDO */
+    PD_SELECT_VARIABLE,     /* Variable PDO */
+    PD_SELECT_BATTERY,      /* Battery PDO */
+    PD_SELECT_PPS,          /* PPS APDO */
+    PD_SELECT_AVS           /* SPR AVS / EPR AVS */
 };
+
+/** @brief 待回复消息类型（sink_service_reply() switch 分支） */
 enum pd_sink_reply_e
 {
-    PD_REPLY_NONE = 0U,
-    PD_REPLY_SINK_CAP,
-    PD_REPLY_SINK_CAP_EXT,
-    PD_REPLY_EPR_SINK_CAP,
-    PD_REPLY_REVISION,
-    PD_REPLY_EXTENDED,
-    PD_REPLY_REJECT,
-    PD_REPLY_VDM_NAK,
-    PD_REPLY_NOT_SUPPORTED
+    PD_REPLY_NONE = 0U,         /* 无待回复 */
+    PD_REPLY_SINK_CAP,          /* 回复 Sink_Capabilities */
+    PD_REPLY_SINK_CAP_EXT,      /* 回复 Sink_Capabilities_Extended */
+    PD_REPLY_EPR_SINK_CAP,      /* 回复 EPR_Sink_Capabilities */
+    PD_REPLY_REVISION,          /* 回复 Revision */
+    PD_REPLY_EXTENDED,          /* 回复 DPM 提供的扩展消息 */
+    PD_REPLY_REJECT,            /* 回复 Reject */
+    PD_REPLY_VDM_NAK,           /* 回复 VDM NAK（结构化 VDM 请求） */
+    PD_REPLY_NOT_SUPPORTED      /* 回复 Not_Supported */
 };
 
+/* ===== 内部状态结构 ===== */
+/** @brief Sink 策略层全局运行上下文（单例） */
 struct pd_sink_t
 {
-    struct pd_sink_config_t config;
-    struct pd_sink_status_t status;
-    union usbpd_pdo_u source_pdo[USBPD_MAX_DATA_OBJ];
-    union usbpd_pdo_u epr_source_pdo[USBPD_MAX_EPR_DATA_OBJ];
-    uint8_t source_count;
-    uint8_t epr_source_count;
-    uint8_t select_kind : 3;
-    uint8_t source_valid : 1;
-    uint8_t epr_caps_valid : 1;
-    uint8_t target_dirty : 1;
-    uint8_t get_source_cap_sent : 1;
-    uint8_t get_epr_cap_sent : 1;
-    uint8_t epr_mode_sent : 1;
-    uint8_t epr_enter_acked : 1;
-    uint8_t epr_keepalive_pending : 1;
-    uint8_t epr_target_pending : 1;
-    uint8_t epr_exit_pending : 1;
-    uint8_t peer_soft_reset : 1;
-    uint8_t soft_reset_sent : 1;
-    uint8_t wait_pending : 1;
-    uint8_t pending_reply;
-    uint8_t wait_retries : 2;
-    uint8_t hard_reset_count : 2;
-    uint8_t selected_index;
-    uint8_t pending_vdm_sop;
-    uint32_t pending_vdm;
-    uint8_t pending_ext_type;
-    uint16_t pending_ext_length;
-    uint8_t pending_ext_data[USBPD_EXT_DATA_MAX];
-    uint32_t selected_voltage_mv;
-    uint32_t selected_current_ma;
-    uint32_t deadline_ms;
-    uint32_t epr_keepalive_ms;
-    uint32_t pps_request_ms;
-    uint32_t now_ms;
+    struct pd_sink_config_t config;               /* 初始化配置快照 */
+    struct pd_sink_status_t status;               /* 对外可见运行时状态 */
+    union usbpd_pdo_u source_pdo[USBPD_MAX_DATA_OBJ];        /* 对端 Source PDO 缓存（SPR 模式） */
+    union usbpd_pdo_u epr_source_pdo[USBPD_MAX_EPR_DATA_OBJ]; /* 对端 EPR Source PDO 缓存 */
+    uint8_t source_count;                         /* source_pdo 有效数量 */
+    uint8_t epr_source_count;                     /* epr_source_pdo 有效数量 */
+    uint8_t select_kind : 3;                      /* 当前 PDO 选择类型（见 pd_sink_select_e） */
+    uint8_t source_valid : 1;                     /* source_pdo 已收集有效 */
+    uint8_t epr_caps_valid : 1;                   /* epr_source_pdo 已收集有效 */
+    uint8_t target_dirty : 1;                     /* 应用层请求目标已变更，需重新选择 */
+    uint8_t get_source_cap_sent : 1;              /* 已发送 Get_Source_Cap */
+    uint8_t get_epr_cap_sent : 1;                 /* 已发送 EPR_Get_Source_Cap */
+    uint8_t epr_mode_sent : 1;                    /* 已发送 EPR_Mode */
+    uint8_t epr_enter_acked : 1;                  /* 已收到 EPR_Mode(Enter_Ack) */
+    uint8_t epr_keepalive_pending : 1;            /* 已发送 EPR KeepAlive，等待 ACK */
+    uint8_t epr_target_pending : 1;               /* EPR 目标电压未达成，需先进 5V */
+    uint8_t epr_exit_pending : 1;                 /* EPR 退出待处理（先协商 SPR 再 Exit） */
+    uint8_t peer_soft_reset : 1;                  /* 对端发起 Soft Reset，待回复 Accept */
+    uint8_t soft_reset_sent : 1;                  /* 本端已发送 Soft Reset，等待 Accept */
+    uint8_t wait_pending : 1;                     /* 收到 Wait，等待 tSinkRequest 后重试 */
+    uint8_t pending_reply;                        /* 待回复消息类型（见 pd_sink_reply_e） */
+    uint8_t wait_retries : 2;                     /* Wait 已重试次数 */
+    uint8_t hard_reset_count : 2;                 /* Hard Reset 已发送次数（上限 USBPD_N_HARD_RESET_COUNT） */
+    uint8_t selected_index;                       /* 对端 PDO 列表中选中的序号（0 基） */
+    uint8_t pending_vdm_sop;                      /* 待回复 VDM 的 SOP */
+    uint32_t pending_vdm;                        /* 待回复 VDM 原始值（NAK 构造） */
+    uint8_t pending_ext_type;                     /* 待回复扩展消息类型 */
+    uint16_t pending_ext_length;                  /* 待回复扩展消息长度 */
+    uint8_t pending_ext_data[USBPD_EXT_DATA_MAX]; /* 待回复扩展消息数据缓冲 */
+    uint32_t selected_voltage_mv;                 /* 当前选中电压（mV，已对齐 APDO 步长） */
+    uint32_t selected_current_ma;                 /* 当前选中电流（mA，已对齐步长） */
+    uint32_t deadline_ms;                         /* 当前状态截止时间（毫秒） */
+    uint32_t epr_keepalive_ms;                    /* 下次 EPR KeepAlive 发送时间（毫秒） */
+    uint32_t pps_request_ms;                      /* 下次 PPS 动态请求时间（毫秒） */
+    uint32_t now_ms;                              /* 最近一次 task 调度时的系统时间（毫秒） */
 };
 
-static struct pd_sink_t g_sink;
+static struct pd_sink_t g_sink;  /* Sink 策略层全局上下文单例 */
 
+/* ===== 内部辅助函数 ===== */
+/**
+ * @brief  判断当前状态 deadline 是否到期（毫秒回绕安全）
+ * @param now  当前系统时间（毫秒）
+ * @return 1=已到期，0=未到期
+ */
 static uint8_t sink_deadline(uint32_t now)
 {
     return ((int32_t)(now - g_sink.deadline_ms) >= 0);
 }
+
+/**
+ * @brief  两 32 位值取较小者
+ */
 static uint32_t sink_min(uint32_t a, uint32_t b)
 {
     return (a < b) ? a : b;
 }
+
+/**
+ * @brief  判断 CC 引脚是否检测到 Rp（≥ USBPD_CC_RP_DEF）
+ * @param cc  CC 引脚状态（见 usbpd_cc_e）
+ * @return 1=检测到 Rp，0=未检测到
+ */
 static uint8_t sink_is_rp(enum usbpd_cc_e cc)
 {
     return cc >= USBPD_CC_RP_DEF;
 }
 
+/**
+ * @brief  DPM 事件回调包装（向应用层转发事件）
+ *
+ * @param event  事件类型（见 usbpd_dpm_event_e）
+ * @param value0  事件关联值 0（CONTRACT=电压 mV）
+ * @param value1  事件关联值 1（CONTRACT=电流 mA）
+ */
 static void sink_dpm_event(uint8_t event, uint32_t value0, uint32_t value1)
 {
     if (g_sink.config.dpm.event != 0)
         g_sink.config.dpm.event(0U, event, value0, value1, g_sink.config.dpm.context);
 }
 
+/**
+ * @brief  DPM 消息接收回调包装（向应用层转发消息，未消费则协议层默认处理）
+ *
+ * @param msg  协议层消息
+ * @param category  消息分类（见 usbpd_dpm_message_category_e）
+ * @return USBPD_OK 已消费；USBPD_ERR_UNSUPPORTED 未消费
+ */
 static int sink_dpm_message(const struct usbpd_protocol_msg_t *msg, uint8_t category)
 {
     if ((msg == 0) || (g_sink.config.dpm.message_received == 0))
@@ -102,6 +156,10 @@ static int sink_dpm_message(const struct usbpd_protocol_msg_t *msg, uint8_t cate
                                               g_sink.config.dpm.context);
 }
 
+/**
+ * @brief  准备扩展消息回复（向 DPM 请求填充，失败则 Not_Supported）
+ * @param type  扩展消息类型（见 usbpd_extended_e）
+ */
 static void sink_prepare_extended_reply(uint8_t type)
 {
     uint16_t length = sizeof(g_sink.pending_ext_data);
@@ -120,12 +178,21 @@ static void sink_prepare_extended_reply(uint8_t type)
     }
 }
 
+/**
+ * @brief  设置状态机当前状态与截止时间
+ *
+ * @param state  目标状态（见 pd_sink_state_e）
+ * @param deadline  截止时间（毫秒，0=无截止）
+ */
 static void sink_set_state(uint8_t state, uint32_t deadline)
 {
     g_sink.status.state = state;
     g_sink.deadline_ms = deadline;
 }
 
+/**
+ * @brief  复位电源合约（丢失协商电压/电流、清除 EPR 与 PPS 状态）
+ */
 static void sink_reset_contract(void)
 {
     g_sink.status.contract_valid = 0U;
@@ -144,6 +211,10 @@ static void sink_reset_contract(void)
     g_sink.wait_pending = 0U;
 }
 
+/**
+ * @brief  填充 Sink 默认配置（5V/1A Fixed PDO）
+ * @param config  输出配置
+ */
 static void sink_default_config(struct pd_sink_config_t *config)
 {
     memset(config, 0, sizeof(*config));
@@ -157,6 +228,15 @@ static void sink_default_config(struct pd_sink_config_t *config)
     config->sink_pdo[0].sink_fixed.type = USBPD_PDO_FIXED;
 }
 
+/**
+ * @brief  校验 Sink 配置合法性
+ *
+ * 校验点：max 值非零、PDO 数量范围、首 PDO 为 5V Fixed、EPR PDO 数量
+ * 必须 8..11、Sink_Cap_Ext 三元 PDP 单调递增。
+ *
+ * @param config  待校验配置
+ * @return 1=合法，0=非法
+ */
 static uint8_t sink_config_valid(const struct pd_sink_config_t *config)
 {
     if ((config->max_voltage_mv == 0U) || (config->max_current_ma == 0U) || (config->max_power_mw == 0U) ||
@@ -182,6 +262,18 @@ static uint8_t sink_config_valid(const struct pd_sink_config_t *config)
     return 1U;
 }
 
+/**
+ * @brief  判断给定 PDO 列表中是否存在满足目标电压电流的条目
+ *
+ * 覆盖 Fixed / Variable / Battery / PPS / SPR AVS / EPR AVS 六类 PDO 的可行性校验。
+ *
+ * @param pdo  PDO 数组
+ * @param count  PDO 数量
+ * @param voltage_mv  目标电压（mV）
+ * @param current_ma  目标电流（mA）
+ * @param epr  1=EPR 模式（允许 EPR AVS），0=SPR 模式
+ * @return 1=至少一条 PDO 可行，0=均不可行
+ */
 static uint8_t sink_pdo_allows_target(const union usbpd_pdo_u *pdo, uint8_t count, uint32_t voltage_mv,
                                       uint32_t current_ma, uint8_t epr)
 {
@@ -242,6 +334,16 @@ static uint8_t sink_pdo_allows_target(const union usbpd_pdo_u *pdo, uint8_t coun
     return 0U;
 }
 
+/**
+ * @brief  校验应用层请求目标是否在 Sink 能力范围内
+ *
+ * 先检查全局 max_voltage/max_current/max_power，再根据电压范围选择
+ * SPR sink_pdo 列表或 EPR epr_sink_pdo 列表做可行性校验。
+ *
+ * @param voltage_mv  目标电压（mV）
+ * @param current_ma  目标电流（mA）
+ * @return 1=允许，0=超出能力
+ */
 static uint8_t sink_target_allowed(uint32_t voltage_mv, uint32_t current_ma)
 {
     uint64_t power = (uint64_t)voltage_mv * current_ma;
@@ -258,11 +360,27 @@ static uint8_t sink_target_allowed(uint32_t voltage_mv, uint32_t current_ma)
     return sink_pdo_allows_target(g_sink.config.sink_pdo, g_sink.config.sink_pdo_count, voltage_mv, current_ma, 0U);
 }
 
+/**
+ * @brief  通过协议层发送数据消息（固定使用 SOP 通道）
+ * @param type  数据消息类型
+ * @param objects  数据对象数组
+ * @param count  对象数量
+ * @param now_ms  当前时间
+ */
 static int sink_send_data(uint8_t type, const uint32_t *objects, uint8_t count, uint32_t now_ms)
 {
     return usbpd_protocol_send_data(USBPD_SOP, type, objects, count, now_ms);
 }
 
+/**
+ * @brief  构造并发送 Request 控制消息
+ *
+ * 根据 select_kind 选择 RDO 构造分支（Fixed/Battery/PPS/AVS），
+ * EPR 模式发送 EPR_Request，否则发送 Request。发送成功后转入 REQUESTED 状态。
+ *
+ * @param now_ms  当前时间
+ * @return 协议层返回码
+ */
 static int sink_send_request(uint32_t now_ms)
 {
     union usbpd_rdo_u rdo;
@@ -317,6 +435,14 @@ static int sink_send_request(uint32_t now_ms)
     return ret;
 }
 
+/**
+ * @brief  调度待回复消息的实际发送（在主循环中被周期性调用）
+ *
+ * 根据 pending_reply 类型选择发送接口（sink_send_data / usbpd_protocol_send_ctrl /
+ * usbpd_protocol_send_extended），发送成功后清空调度标志。
+ *
+ * @param now_ms  当前时间
+ */
 static void sink_service_reply(uint32_t now_ms)
 {
     int ret = USBPD_BUSY;
@@ -386,6 +512,17 @@ static void sink_service_reply(uint32_t now_ms)
         g_sink.pending_reply = PD_REPLY_NONE;
 }
 
+/**
+ * @brief  在给定 PDO 列表中查找满足应用层请求的条目并选中
+ *
+ * 覆盖 Fixed / Variable / Battery / PPS / SPR AVS / EPR AVS 六类 PDO；
+ * APDO 电压电流对齐到协议步长（20mV / 50mA / 25mV）。
+ *
+ * @param pdo  PDO 数组
+ * @param count  PDO 数量
+ * @param epr  1=EPR 模式（允许 EPR AVS），0=SPR 模式
+ * @return USBPD_OK 选中成功；USBPD_ERR 未找到匹配
+ */
 static int sink_choose_from(const union usbpd_pdo_u *pdo, uint8_t count, uint8_t epr)
 {
     uint8_t i;
@@ -490,6 +627,11 @@ static int sink_choose_from(const union usbpd_pdo_u *pdo, uint8_t count, uint8_t
     return USBPD_ERR;
 }
 
+/**
+ * @brief  在 Source PDO 列表中查找 5V Fixed PDO 作为兜底
+ *
+ * @return USBPD_OK 找到并选中；USBPD_ERR 未找到
+ */
 static int sink_choose_5v(void)
 {
     uint8_t i;
@@ -510,6 +652,11 @@ static int sink_choose_5v(void)
     return USBPD_ERR;
 }
 
+/**
+ * @brief  开始 PDO 选择流程（根据请求电压范围决定 EPR 进入、EPR 能力查询或直接选 PDO）
+ *
+ * @param now_ms  当前时间
+ */
 static void sink_begin_selection(uint32_t now_ms)
 {
     g_sink.status.fallback_active = 0U;
@@ -576,6 +723,15 @@ static void sink_begin_selection(uint32_t now_ms)
         sink_set_state(PD_SINK_ERROR_RECOVERY, now_ms + PD_SINK_ERROR_RECOVERY_MS);
 }
 
+/**
+ * @brief  处理接收到的 Source_Capabilities 消息
+ *
+ * 缓存 PDO 列表、重置等待重试计数；若当前处于 Discovery 或 Ready 状态，
+ * 立即触发 sink_begin_selection()。
+ *
+ * @param msg  协议层消息（应为 Source_Capabilities）
+ * @param now_ms  当前时间
+ */
 static void sink_handle_source_caps(const struct usbpd_protocol_msg_t *msg, uint32_t now_ms)
 {
     uint8_t count;
@@ -591,6 +747,13 @@ static void sink_handle_source_caps(const struct usbpd_protocol_msg_t *msg, uint
         sink_begin_selection(now_ms);
 }
 
+/**
+ * @brief  校验 EPR Source_Capabilities 中首个 PDO 是否为 EPR 标志的 5V Fixed
+ *
+ * @param payload  EPR Source PDO 列表原始字节
+ * @param count  PDO 数量
+ * @return 1=合法，0=非法
+ */
 static uint8_t sink_epr_caps_are_valid(const uint8_t *payload, uint8_t count)
 {
     union usbpd_pdo_u first;
@@ -601,6 +764,16 @@ static uint8_t sink_epr_caps_are_valid(const uint8_t *payload, uint8_t count)
             (first.fixed.epr_capable != 0U));
 }
 
+/**
+ * @brief  协议层事件回调（Sink 策略层与协议层的主要交互入口）
+ *
+ * 处理 Hard Reset / Soft Reset / TX_TIMEOUT / RX_OVERFLOW / ERROR 等协议事件，
+ * 以及 RX / EXT_RX 两类消息事件的分发。
+ *
+ * @param event  协议层事件类型（见 usbpd_protocol_event_e）
+ * @param msg  事件关联消息（RX / EXT_RX 事件携带）
+ * @param arg  协议层回调用户参数（未使用，固定为 0）
+ */
 static void sink_protocol_event(uint8_t event, const struct usbpd_protocol_msg_t *msg, void *arg)
 {
     uint32_t now_ms = g_sink.now_ms;
@@ -871,11 +1044,23 @@ static void sink_protocol_event(uint8_t event, const struct usbpd_protocol_msg_t
     }
 }
 
+/* ===== 对外接口 ===== */
+/**
+ * @brief  查询端口是否已连接
+ * @return 1=已连接（状态 != Unattached），0=未连接
+ */
 uint8_t pd_sink_is_attached(void)
 {
     return (g_sink.status.state != PD_SINK_UNATTACHED);
 }
 
+/**
+ * @brief  发起功率请求（仅登记目标，实际发送由状态机在下一机会触发）
+ *
+ * @param voltage_mv  目标电压（mV）
+ * @param current_ma  目标电流（mA）
+ * @return USBPD_OK 请求已登记；USBPD_ERR 参数越界
+ */
 int pd_sink_request(uint32_t voltage_mv, uint32_t current_ma)
 {
     if (sink_target_allowed(voltage_mv, current_ma) == 0U)
@@ -886,6 +1071,11 @@ int pd_sink_request(uint32_t voltage_mv, uint32_t current_ma)
     return USBPD_OK;
 }
 
+/**
+ * @brief  查询 Sink 运行时状态快照
+ * @param status  输出状态结构
+ * @return USBPD_OK 成功；USBPD_ERR 参数为 NULL
+ */
 int pd_sink_get_status(struct pd_sink_status_t *status)
 {
     if (status == 0)
@@ -894,6 +1084,12 @@ int pd_sink_get_status(struct pd_sink_status_t *status)
     return USBPD_OK;
 }
 
+/**
+ * @brief  手动发送控制消息（调试/测试用）
+ * @param sop  SOP 类型
+ * @param type  控制消息类型
+ * @return 协议层返回码
+ */
 int pd_sink_send_control(uint8_t sop, uint8_t type)
 {
     if ((sop > USBPD_SOP_DPRIME) || (type > USBPD_CTRL_GET_REVISION))
@@ -901,6 +1097,14 @@ int pd_sink_send_control(uint8_t sop, uint8_t type)
     return usbpd_protocol_send_ctrl(sop, type, g_sink.now_ms);
 }
 
+/**
+ * @brief  手动发送数据消息（调试/测试用）
+ * @param sop  SOP 类型
+ * @param type  数据消息类型
+ * @param objects  数据对象数组
+ * @param count  对象数量
+ * @return 协议层返回码
+ */
 int pd_sink_send_data_objects(uint8_t sop, uint8_t type, const uint32_t *objects, uint8_t count)
 {
     if ((sop > USBPD_SOP_DPRIME) || (type > USBPD_DATA_VENDOR_DEFINED))
@@ -908,6 +1112,14 @@ int pd_sink_send_data_objects(uint8_t sop, uint8_t type, const uint32_t *objects
     return usbpd_protocol_send_data(sop, type, objects, count, g_sink.now_ms);
 }
 
+/**
+ * @brief  手动发送扩展消息（调试/测试用）
+ * @param sop  SOP 类型
+ * @param type  扩展消息类型
+ * @param data  扩展数据缓冲
+ * @param length  数据长度
+ * @return 协议层返回码
+ */
 int pd_sink_send_extended(uint8_t sop, uint8_t type, const uint8_t *data, uint16_t length)
 {
     if ((sop > USBPD_SOP_DPRIME) || (type > USBPD_EXT_VENDOR_DEFINED))
@@ -915,11 +1127,24 @@ int pd_sink_send_extended(uint8_t sop, uint8_t type, const uint8_t *data, uint16
     return usbpd_protocol_send_extended_sop(sop, type, data, length, g_sink.now_ms);
 }
 
+/**
+ * @brief  初始化 Sink 策略层（完整初始化：配置 + PHY + 协议层）
+ *
+ * @param config  初始化配置（可为 NULL，此时使用 5V/1A 默认值）
+ * @return USBPD_OK 成功；USBPD_ERR_PARAM 配置非法；USBPD_ERR PHY 初始化失败
+ */
 int pd_sink_init(const struct pd_sink_config_t *config)
 {
     return pd_sink_policy_init(config, 1U);
 }
 
+/**
+ * @brief  初始化 Sink 策略层（可控是否初始化底层硬件）
+ *
+ * @param config  初始化配置（可为 NULL）
+ * @param initialize_hardware  1=同时初始化 PHY 与观察器，0=仅配置策略层
+ * @return USBPD_OK 成功；USBPD_ERR_PARAM 配置非法；USBPD_ERR PHY 初始化失败
+ */
 int pd_sink_policy_init(const struct pd_sink_config_t *config, uint8_t initialize_hardware)
 {
     struct pd_sink_config_t defaults;
@@ -943,6 +1168,14 @@ int pd_sink_policy_init(const struct pd_sink_config_t *config, uint8_t initializ
     return USBPD_OK;
 }
 
+/**
+ * @brief  Sink 策略层周期任务（需在主循环中以毫秒节拍调用）
+ *
+ * 内部依次调用 PHY 层任务、协议层任务、待发送回复调度、CC/VBUS 检测、
+ * 状态机迁移、EPR KeepAlive / PPS 动态请求 / Soft-Hard Reset 处理。
+ *
+ * @param now_ms  当前系统时间（毫秒）
+ */
 void pd_sink_task(uint32_t now_ms)
 {
     enum usbpd_cc_e cc1;

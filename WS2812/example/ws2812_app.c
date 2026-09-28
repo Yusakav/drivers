@@ -1,119 +1,212 @@
 /**
- * @file ws2812_app.c
- * @author Yusakav (YusakaVivy@gmail.com)
- * @brief 
- * @version 0.1
- * @date 2026-09-27
- * 
- * @copyright Copyright (c) 2026
- * 
- */
+* @file ws2812_app.c
+* @brief CH582M WS2812 SPI 示例（整数线性颜色插值）
+*
+* 所属模块：WS2812 驱动示例（演示 SPI 后端 + 颜色插值的完整用法）。
+* 对应头文件：ws2812_app.h；硬件依赖：CH582M SPI + DMA。
+*
+* 完整初始化链路：
+*   ws2812_phy_ch582m_t (SPI PHY 层)
+*       ↓
+*   ws2812_spi_configure (SPI 后端配置，绑定 DMA 缓冲 + 时序参数)
+*       ↓
+*   ws2812_config_t (像素数组 + 颜色顺序 + 后端类型 + backend_context)
+*       ↓
+*   ws2812_init → ws2812_spi_backend_init → SPI DMA + WS2812 管理层就绪
+*
+* 插值算法：整数线性插值，step 从 0 到 EXAMPLE_STEPS（含），
+*           每通道 delta×step / EXAMPLE_STEPS，避免浮点。
+*/
+#include "ws2812_app.h"
 
+#include "ws2812_phy_ch582m.h"
 #include "ws2812_spi.h"
+#include "CH58x_common.h"
+
+#include <stddef.h>
+#include <stdint.h>
+
+/* ===== 示例参数 ===== */
+#define EXAMPLE_LED_COUNT 1U    /**< 灯珠数量（本示例仅 1 颗） */
+#define EXAMPLE_STEPS 200U      /**< 每对颜色之间的插值步数（0..200 共 201 个采样点） */
+#define EXAMPLE_DELAY_MS 10U    /**< step 调用间隔（毫秒）—— 200×10ms = 2s 走完一对颜色 */
+
+/** @brief SPI DMA 缓冲大小（字节）= ceil(LED_COUNT×24bit / SPI 0/1 码比 / 8) + reset 时间对应的 SPI 字节数 */
+#define EXAMPLE_TX_BYTES WS2812_SPI_BUFFER_SIZE(EXAMPLE_LED_COUNT, WS2812_SPI_DEFAULT_HZ, WS2812_DEFAULT_RESET_US)
+
+/** @brief 数组元素数量宏（编译时求值） */
+#define ARRAY_SIZE(array) (sizeof(array) / sizeof((array)[0]))
+
+/* ===== 全局对象 ===== */
+static ws2812_t g_strip;              /**< WS2812 管理层句柄 */
+static ws2812_spi_t g_spi_backend;     /**< SPI 后端上下文 */
+static ws2812_phy_ch582m_t g_spi_phy;  /**< CH582M SPI 物理层（GPIO/DMA 寄存器操作） */
+static ws2812_rgb_t g_pixels[EXAMPLE_LED_COUNT]; /**< 像素缓冲（驱动写入，后端读取） */
 
 /**
- * @brief 颜色列表
+ * @brief SPI DMA 源缓冲（必须 4 字节对齐）
  *
- * @note 颜色列表中包含多个颜色值，用于渐变显示
- *
+ * CH582M SPI DMA 要求源地址 4 字节对齐，所以用 uint32_t 数组。
+ * WS2812_SPI_BUFFER_SIZE 计算的是字节数，向上对齐到 uint32_t 个数。
  */
-uint32_t color_list[] = {
-    0x00000000, // 黑色
-    0x00FFFFFF, // 白色
-    0x00FF0000, // 绿色
-    0x0000FF00, // 红色
-    0x000000FF, // 蓝色
-    0x00FFFF00, // 黄色
-    0x0000FFFF, // 品红/紫色
-    0x00FF00FF, // 青色
-    0x0064FF00, // 橙色
-    0x00FFC0CB, // 粉色
-    0x00FFD700, // 金色
-    0x00EE82EE, // 紫罗兰
-    0x009ACD32, // 黄绿色
-    0x004B0082, // 靛蓝色
-    0x00008080, // 蓝绿色
-    0x00800080, // 紫色
-    0x00FF4500, // 橙红
-    0x0032CD32, // 酸橙绿
-    0x001E90FF, // 道奇蓝
-    0x00FF1493, // 深粉色
-    0x00DC143C, // 深红
-    0x008B4513, // 棕色
-    0x0040E0D0, // 绿松石
-    0x00EE7600, // 暗橙色
-    0x007FFF00, // 绿黄色
-    0x009932CC, // 深紫色
-    0x0000CED1, // 暗青色
-    0x00BC8F8F, // 浅棕色
-    0x00DDA0DD, // 梅红色
-    0x00F0E68C, // 卡其色
+static uint32_t g_tx_words[(EXAMPLE_TX_BYTES + 3U) / 4U];
+
+static uint16_t g_step;        /**< 当前插值步（0..EXAMPLE_STEPS） */
+static size_t g_color_index;   /**< 当前颜色对起点索引（指向 g_colors） */
+
+/** @brief 预设颜色表（8 种，插值循环：0→1→2→...→7→0） */
+static const uint32_t g_colors[] = {
+    0x000000UL,  /**< 黑 */
+    0xFFFFFFUL,  /**< 白 */
+    0xFF0000UL,  /**< 红 */
+    0x00FF00UL,  /**< 绿 */
+    0x0000FFUL,  /**< 蓝 */
+    0xFFFF00UL,  /**< 黄 */
+    0x00FFFFUL,  /**< 青 */
+    0xFF00FFUL,  /**< 紫 */
 };
 
-uint8_t *str_list[] = {"黑色",
-                       "白色",
-                       "绿色",
-                       "红色",
-                       "蓝色",
-                       "黄色",
-                       "品红",
-                       "青色",
-                       "橙色",
-                       "粉色",
-                       "金色",
-                       "紫罗兰",
-                       "黄绿色",
-                       "靛蓝色",
-                       "蓝绿色",
-                       "紫色",
-                       "橙红",
-                       "酸橙绿",
-                       "道奇蓝",
-                       "深粉色",
-                       "深红",
-                       "棕色",
-                       "绿松石",
-                       "暗橙色",
-                       "绿黄色",
-                       "深紫色",
-                       "暗青色",
-                       "浅棕色",
-                       "梅红色",
-                       "卡其色",
-};
-
+/* ===== 内部辅助函数 ===== */
 
 /**
- * @brief  WS2812 LED颜色渐变示例
+ * @brief  两通道整数线性插值（避免浮点）
  *
- * @note 该示例将所有LED颜色渐变，每个LED颜色渐变到下一个颜色
+ * formula: result = from + (to - from) × step / EXAMPLE_STEPS
  *
+ * @param from  起始通道值（0..255）
+ * @param to  目标通道值（0..255）
+ * @param step  当前步（0..EXAMPLE_STEPS，step=0 返回 from，step=STEPS 返回 to）
+ * @return 插值结果（0..255）
+ */
+static uint8_t interpolate_channel(uint8_t from, uint8_t to, uint16_t step)
+{
+    int32_t delta = (int32_t)to - (int32_t)from;
+    return (uint8_t)((int32_t)from + (delta * (int32_t)step) / (int32_t)EXAMPLE_STEPS);
+}
+
+/**
+ * @brief  两个 24 位颜色之间的三通道整数线性插值
+ * @param from  起始颜色（0xRRGGBB）
+ * @param to  目标颜色（0xRRGGBB）
+ * @param step  当前步
+ * @return 插值结果（0xRRGGBB）
+ */
+static uint32_t interpolate_color(uint32_t from, uint32_t to, uint16_t step)
+{
+    uint8_t r = interpolate_channel((uint8_t)(from >> 16U), (uint8_t)(to >> 16U), step);
+    uint8_t g = interpolate_channel((uint8_t)(from >> 8U), (uint8_t)(to >> 8U), step);
+    uint8_t b = interpolate_channel((uint8_t)from, (uint8_t)to, step);
+    return ((uint32_t)r << 16U) | ((uint32_t)g << 8U) | b;
+}
+
+/* ===== 对外接口 ===== */
+
+/**
+ * @brief  初始化 WS2812 SPI 示例
+ *
+ * 配置链路：SPI 物理层 → SPI 后端（绑定 DMA 缓冲）→ WS2812 管理层。
+ * 成功后清屏 + 重置插值计数器，处于可 step 状态。
+ *
+ * @return WS2812_OK / 后端返回码
+ */
+ws2812_ret_t ws2812_spi_example_init(void)
+{
+    ws2812_spi_config_t spi_config = {
+        &g_spi_phy, (uint8_t *)g_tx_words, sizeof(g_tx_words), WS2812_SPI_DEFAULT_HZ, WS2812_DEFAULT_RESET_US,
+    };
+    ws2812_config_t config;
+    ws2812_ret_t ret;
+
+    /* ① 配置 SPI 后端：DMA 缓冲 + 时序参数 */
+    ret = ws2812_spi_configure(&g_spi_backend, &spi_config, EXAMPLE_LED_COUNT);
+    if (ret != WS2812_OK)
+    {
+        return ret;
+    }
+
+    /* ② 配置 WS2812 管理层：像素缓冲 + 后端上下文 */
+    config.pixels = g_pixels;
+    config.pixel_count = EXAMPLE_LED_COUNT;
+    config.color_order = WS2812_ORDER_GRB;
+    config.backend = WS2812_BACKEND_SPI;
+    config.backend_context = &g_spi_backend;
+    ret = ws2812_init(&g_strip, &config);
+    if (ret != WS2812_OK)
+    {
+        return ret;
+    }
+
+    /* ③ 重置插值状态 + 清屏 */
+    g_step = 0U;
+    g_color_index = 0U;
+    return ws2812_clear_and_show(&g_strip);
+}
+
+/**
+ * @brief  执行一帧颜色插值更新（需以 EXAMPLE_DELAY_MS 节拍调用）
+ *
+ * 忙状态机：is_busy==1 → 返回 BUSY，不消费 DMA 完成事件；
+ *           is_busy==0 → take_complete 消费挂起完成事件（防下次误判）；
+ *           计算插值 → fill_hex → show → step++；
+ *           step>STEPS 时 step 归零、color_index 推进到下一对颜色。
+ *
+ * @return WS2812_OK / BUSY / 其他错误码
+ */
+ws2812_ret_t ws2812_spi_example_step(void)
+{
+    size_t next_index;
+    uint32_t color;
+    ws2812_ret_t ret;
+
+    /* ① 忙检测：DMA 发送中直接跳过 */
+    if (ws2812_is_busy(&g_strip) != 0U)
+    {
+        return WS2812_RET_BUSY;
+    }
+    /* ② 消费上次 DMA 完成事件（防 complete_pending 残留） */
+    (void)ws2812_take_complete(&g_strip);
+
+    /* ③ 计算插值颜色（从 g_colors[color_index] → g_colors[next_index]，当前步 g_step） */
+    next_index = (g_color_index + 1U) % ARRAY_SIZE(g_colors);
+    color = interpolate_color(g_colors[g_color_index], g_colors[next_index], g_step);
+    ret = ws2812_fill_hex(&g_strip, color);
+    if (ret != WS2812_OK)
+    {
+        return ret;
+    }
+
+    /* ④ 触发 SPI DMA 传输 */
+    ret = ws2812_show(&g_strip);
+    if (ret != WS2812_OK)
+    {
+        return ret;
+    }
+
+    /* ⑤ 推进插值步，超限则切换到下一对颜色 */
+    ++g_step;
+    if (g_step > EXAMPLE_STEPS)
+    {
+        g_step = 0U;
+        g_color_index = next_index;
+    }
+    return WS2812_OK;
+}
+
+/**
+ * @brief  阻塞式演示入口（init → 死循环 step + DelayMs）
+ *
+ * 直接调用即可让一个灯珠循环显示 黑→白→红→绿→蓝→黄→青→紫 渐变。
+ * 201 帧×10ms/帧 ≈ 2s 走完一对颜色，8 色循环一周约 14s。
  */
 void ws2812_spi_example_0(void)
 {
-
-    uint32_t i = 0, j = 0;
-    uint32_t c = 0x0f0f00;
-
-    while (1)
+    if (ws2812_spi_example_init() != WS2812_OK)
     {
-        c = color_list[i];
-        uint32_t next_color = color_list[i + 1];
-        i++;
-        if ((i + 1) >= LIST_SIZE(color_list))
-        {
-            i = 0;
-        }
-        USB_PRINT("%s\n", str_list[i]);
-        for (j = 0; j < APP_WS2812_MAX_STEP; j += 1)
-        {
-            uint32_t color = interpolateColors(c, next_color, j);
-            for (int var = 0; var < APP_WS2812_LED_NUM; ++var)
-            {
-                setPixelColor(var, hex2rgb(color));
-            }
-            w2812_spi_sync();
-            DelayMs(100);
-        }
+        return;
+    }
+    for (;;)
+    {
+        (void)ws2812_spi_example_step();
+        DelayMs(EXAMPLE_DELAY_MS);
     }
 }

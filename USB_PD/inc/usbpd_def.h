@@ -37,45 +37,45 @@
 
 /* ===== 返回码定义 ===== */
 /* 返回码约定：0 表示成功，负值表示各类错误 */
-#define USBPD_OK                 0 /* 成功 */
-#define USBPD_ERR                (-1) /* 通用错误 */
-#define USBPD_BUSY               (-2) /* 忙，操作暂不可执行 */
-#define USBPD_ERR_PARAM          (-3) /* 参数错误 */
-#define USBPD_ERR_UNSUPPORTED    (-4) /* 不支持的功能/特性 */
-#define USBPD_ERR_STATE          (-5) /* 状态机状态不合法 */
-#define USBPD_ERR_TIMEOUT        (-6) /* 协议超时 */
-#define USBPD_ERR_PROTOCOL       (-7) /* 协议错误（帧格式/字段非法） */
-#define USBPD_ERR_OVERFLOW       (-8) /* 缓冲区溢出/数据越界 */
+#define USBPD_OK                 (0)     /* 成功 */
+#define USBPD_ERR                (-1)    /* 通用错误 */
+#define USBPD_BUSY               (-2)    /* 忙，操作暂不可执行 */
+#define USBPD_ERR_PARAM          (-3)    /* 参数错误 */
+#define USBPD_ERR_UNSUPPORTED    (-4)    /* 不支持的功能/特性 */
+#define USBPD_ERR_STATE          (-5)    /* 状态机状态不合法 */
+#define USBPD_ERR_TIMEOUT        (-6)    /* 协议超时 */
+#define USBPD_ERR_PROTOCOL       (-7)    /* 协议错误（帧格式/字段非法） */
+#define USBPD_ERR_OVERFLOW       (-8)    /* 缓冲区溢出/数据越界 */
 
 /* ===== 报文长度与数据对象数量上限 ===== */
-#define USBPD_MAX_DATA_OBJ          7U /* 单帧最大数据对象（DO）数量：7 个 */
-#define USBPD_MAX_EPR_DATA_OBJ      11U /* EPR（扩展功率范围）模式下最大数据对象数量：11 个 */
-#define USBPD_CRC_LEN               4U /* 帧尾部 CRC 长度：4 字节 */
-#define USBPD_MAX_FRAME_LEN         30U /* 单帧最大长度：30 字节（不含 CRC） */
-#define USBPD_TRACE_FRAME_LEN       34U /* 跟踪/抓包缓冲帧长度：34 字节（含 CRC） */
-#define USBPD_EXT_DATA_MAX          260U /* 扩展消息最大数据长度：260 字节 */
-#define USBPD_EXT_CHUNK_DATA_MAX    26U /* 扩展消息分块传输时单块最大数据长度：26 字节 */
+#define USBPD_MAX_DATA_OBJ          7U      /* 单帧最大数据对象（DO）数量：7 个 */
+#define USBPD_MAX_EPR_DATA_OBJ      11U     /* EPR（扩展功率范围）模式下最大数据对象数量：11 个 */
+#define USBPD_CRC_LEN               4U      /* 帧尾部 CRC 长度：4 字节 */
+#define USBPD_MAX_FRAME_LEN         30U     /* 单帧最大长度：30 字节（不含 CRC） */
+#define USBPD_TRACE_FRAME_LEN       34U     /* 跟踪/抓包缓冲帧长度：34 字节（含 CRC） */
+#define USBPD_EXT_DATA_MAX          260U    /* 扩展消息最大数据长度：260 字节 */
+#define USBPD_EXT_CHUNK_DATA_MAX    26U     /* 扩展消息分块传输时单块最大数据长度：26 字节 */
 
 /* Protocol timing values in milliseconds (Table 6.68). */
 /* ===== 协议时序参数（单位：毫秒，对应规范 Table 6.68） ===== */
-#define USBPD_T_RECEIVE_MS                  1U /* 接收端最小有效位时间间隔（tReceive） */
-#define USBPD_T_SENDER_RESPONSE_MIN_MS      27U /* 发送方响应最小等待时间（tSenderResponse 下限） */
-#define USBPD_T_SENDER_RESPONSE_MAX_MS      33U /* 发送方响应最大等待时间（tSenderResponse 上限） */
-#define USBPD_T_RECEIVER_RESPONSE_MS        15U /* 接收方响应时间（tReceiverResponse） */
-#define USBPD_T_SINK_REQUEST_MS             100U /* Sink 发起 Request 的最小间隔（tSinkRequest） */
-#define USBPD_T_CHUNK_SENDER_REQUEST_MS     30U /* 分块传输发送方请求时间（tChunkSenderRequest） */
-#define USBPD_T_CHUNK_SENDER_RESPONSE_MS    30U /* 分块传输发送方响应时间（tChunkSenderResponse） */
-#define USBPD_T_SINK_WAIT_CAP_MIN_MS        310U /* Sink 等待 Source Capabilities 的最小超时（tSinkWaitCap 下限） */
-#define USBPD_T_SINK_WAIT_CAP_MAX_MS        620U /* Sink 等待 Source Capabilities 的最大超时（tSinkWaitCap 上限） */
-#define USBPD_T_PS_TRANSITION_SPR_MS        500U /* SPR 模式电源转换时间（tPSTransition） */
-#define USBPD_T_PS_TRANSITION_SPR_MAX_MS    550U /* SPR 模式电源转换最大时间 */
-#define USBPD_T_PS_TRANSITION_EPR_MS        1020U /* EPR 模式电源转换时间 */
-#define USBPD_T_ENTER_EPR_MS                500U /* 进入 EPR 模式的时间 */
-#define USBPD_T_SINK_EPR_KEEPALIVE_MS       375U /* Sink 侧 EPR KeepAlive 发送间隔 */
-#define USBPD_T_SOURCE_EPR_KEEPALIVE_MS     875U /* Source 侧 EPR KeepAlive 发送间隔 */
-#define USBPD_T_PPS_REQUEST_MS              10000U /* PPS（可编程电源）Request 更新最大间隔 */
-#define USBPD_N_RETRY_COUNT                 2U /* 消息重试次数上限 */
-#define USBPD_N_HARD_RESET_COUNT            2U /* Hard Reset 重试次数上限 */
+#define USBPD_T_RECEIVE_MS                  1U      /* 接收端最小有效位时间间隔（tReceive） */
+#define USBPD_T_SENDER_RESPONSE_MIN_MS      27U     /* 发送方响应最小等待时间（tSenderResponse 下限） */
+#define USBPD_T_SENDER_RESPONSE_MAX_MS      33U     /* 发送方响应最大等待时间（tSenderResponse 上限） */
+#define USBPD_T_RECEIVER_RESPONSE_MS        15U     /* 接收方响应时间（tReceiverResponse） */
+#define USBPD_T_SINK_REQUEST_MS             100U    /* Sink 发起 Request 的最小间隔（tSinkRequest） */
+#define USBPD_T_CHUNK_SENDER_REQUEST_MS     30U     /* 分块传输发送方请求时间（tChunkSenderRequest） */
+#define USBPD_T_CHUNK_SENDER_RESPONSE_MS    30U     /* 分块传输发送方响应时间（tChunkSenderResponse） */
+#define USBPD_T_SINK_WAIT_CAP_MIN_MS        310U    /* Sink 等待 Source Capabilities 的最小超时（tSinkWaitCap 下限） */
+#define USBPD_T_SINK_WAIT_CAP_MAX_MS        620U    /* Sink 等待 Source Capabilities 的最大超时（tSinkWaitCap 上限） */
+#define USBPD_T_PS_TRANSITION_SPR_MS        500U    /* SPR 模式电源转换时间（tPSTransition） */
+#define USBPD_T_PS_TRANSITION_SPR_MAX_MS    550U    /* SPR 模式电源转换最大时间 */
+#define USBPD_T_PS_TRANSITION_EPR_MS        1020U   /* EPR 模式电源转换时间 */
+#define USBPD_T_ENTER_EPR_MS                500U    /* 进入 EPR 模式的时间 */
+#define USBPD_T_SINK_EPR_KEEPALIVE_MS       375U    /* Sink 侧 EPR KeepAlive 发送间隔 */
+#define USBPD_T_SOURCE_EPR_KEEPALIVE_MS     875U    /* Source 侧 EPR KeepAlive 发送间隔 */
+#define USBPD_T_PPS_REQUEST_MS              10000U  /* PPS（可编程电源）Request 更新最大间隔 */
+#define USBPD_N_RETRY_COUNT                 2U      /* 消息重试次数上限 */
+#define USBPD_N_HARD_RESET_COUNT            2U      /* Hard Reset 重试次数上限 */
 
 /** @brief USB PD 协议版本（对应报文头 revision 字段） */
 enum usbpd_revision_e
